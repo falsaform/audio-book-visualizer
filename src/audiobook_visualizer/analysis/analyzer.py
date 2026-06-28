@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from ..config import AnalysisConfig
 from ..models import BookAnalysis, Character, Scene
-from ..utils.llm import ClaudeClient
+from ..utils.llm import build_llm_client
 from . import prompts
 
 ProgressFn = Callable[[str], None]
@@ -26,7 +26,7 @@ ProgressFn = Callable[[str], None]
 class Analyzer:
     def __init__(self, config: AnalysisConfig, on_progress: Optional[ProgressFn] = None):
         self.config = config
-        self._client = ClaudeClient(model=config.model, temperature=config.temperature)
+        self._client = build_llm_client(config)
         self._progress = on_progress or (lambda _msg: None)
 
     # -- public API ---------------------------------------------------------

@@ -9,7 +9,9 @@ project:
     detailed, atmospheric, film still, 16:9
 
 analysis:
-  provider: anthropic
+  # auto = use ANTHROPIC_API_KEY if set, else the bundled Claude Code CLI
+  # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
+  provider: auto
   model: claude-sonnet-4-6        # text analysis model (characters/scenes)
   max_chars_per_chunk: 12000      # how much book text per analysis request
   scenes_per_chunk: 3             # target number of still-frame moments per chunk

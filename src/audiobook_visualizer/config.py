@@ -22,7 +22,9 @@ class ProjectConfig(BaseModel):
 
 
 class AnalysisConfig(BaseModel):
-    provider: str = "anthropic"
+    # auto: prefer ANTHROPIC_API_KEY, else the Claude Code CLI
+    # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
+    provider: str = "auto"
     model: str = "claude-sonnet-4-6"
     max_chars_per_chunk: int = 12000
     scenes_per_chunk: int = 3

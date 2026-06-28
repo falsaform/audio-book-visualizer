@@ -21,7 +21,7 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "sample.txt"
 
 def test_config_defaults():
     cfg = Config()
-    assert cfg.analysis.provider == "anthropic"
+    assert cfg.analysis.provider == "auto"
     assert cfg.generation.provider == "openai"
     assert "16:9" in cfg.project.style
 

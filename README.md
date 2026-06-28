@@ -35,9 +35,19 @@ installed on the host — Python, ffmpeg and all dependencies live in the image.
 ## Install
 
 ```bash
-cp .env.example .env   # fill in ANTHROPIC_API_KEY and OPENAI_API_KEY
+cp .env.example .env   # add your credentials (see below)
 just build             # build the docker image (installs deps via uv)
 ```
+
+**Credentials.** Text analysis needs *one* Claude credential; image generation
+needs an OpenAI key:
+
+- `ANTHROPIC_API_KEY` **or** `CLAUDE_CODE_OAUTH_TOKEN` — for character/scene
+  analysis. If you only have a Claude Code subscription token, set
+  `CLAUDE_CODE_OAUTH_TOKEN` (generate it with `claude setup-token`); analysis is
+  routed through the bundled `claude` CLI, no API key required. If both are set,
+  the API key wins. Override the choice with `analysis.provider` in `config.yaml`.
+- `OPENAI_API_KEY` — for DALL·E frame generation (and optional OpenAI transcription).
 
 `just` on its own lists every recipe:
 
@@ -122,7 +132,10 @@ just claude -p "explain src/audiobook_visualizer/pipeline.py"
 ```
 
 The token is forwarded into the container from `.env` or the host environment by
-docker compose.
+docker compose. The same token also powers the **analysis stage** when no
+`ANTHROPIC_API_KEY` is set (see [Install](#install)) — the pipeline calls this
+CLI under the hood, so you can run the whole thing with just a Claude Code
+subscription token plus an OpenAI key.
 
 ### Managing dependencies
 
