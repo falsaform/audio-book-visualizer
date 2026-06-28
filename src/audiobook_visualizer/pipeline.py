@@ -64,6 +64,7 @@ class Pipeline:
                 audio_path,
                 backend=self.config.audio.backend,
                 model=self.config.audio.model,
+                on_progress=self._transcription_progress(),
             )
             self._progress(f"  {len(result.transcript.segments)} transcript segment(s)")
 
@@ -89,6 +90,23 @@ class Pipeline:
         if not result.chapters:
             raise ValueError("Nothing to analyze: provide an ebook and/or audiobook.")
         return result
+
+    def _transcription_progress(self) -> Callable[[float, float], None]:
+        """A throttled (per-decile) text progress reporter for transcription."""
+        state = {"last_decile": -1}
+
+        def report(done: float, total: float) -> None:
+            if not total:
+                return
+            decile = int(done / total * 10)
+            if decile > state["last_decile"]:
+                state["last_decile"] = decile
+                self._progress(
+                    f"  transcribing… {done / total * 100:3.0f}% "
+                    f"({done:.0f}s / {total:.0f}s)"
+                )
+
+        return report
 
     def analyze(
         self,

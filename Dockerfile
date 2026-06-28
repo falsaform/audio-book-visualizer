@@ -10,14 +10,20 @@ ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
-    PATH="/opt/venv/bin:$PATH"
+    PATH="/opt/venv/bin:/root/.local/bin:$PATH"
 
+# ffmpeg: audiobook decoding. curl/ca-certificates: Claude Code installer.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # uv binary from the official distroless image (pinned for reproducibility).
 COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /uvx /bin/
+
+# Claude Code CLI (native installer, no Node needed). Installs to
+# /root/.local/bin/claude, which is on PATH above. Authenticate at runtime via
+# the CLAUDE_CODE_OAUTH_TOKEN env var (forwarded by docker compose).
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 WORKDIR /app
 

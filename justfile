@@ -30,6 +30,11 @@ lock:
 shell:
     {{run}} bash
 
+# Run the Claude Code CLI in the container (auth via CLAUDE_CODE_OAUTH_TOKEN)
+# e.g. `just claude` for a session, or `just claude -p "explain src/..."`
+claude *args:
+    {{run}} claude {{args}}
+
 # Stop and remove containers + volumes
 down:
     {{compose}} down -v

@@ -15,6 +15,7 @@ caller can proceed with just the ebook text.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable, Optional
 
 from ..config import require_env
 from ..models import Transcript, TranscriptSegment
@@ -22,23 +23,29 @@ from ..models import Transcript, TranscriptSegment
 # Hosted transcription API upload ceiling; we chunk below this.
 _OPENAI_CHUNK_MS = 10 * 60 * 1000  # 10 minutes per chunk
 
+# Progress callback: (seconds_done, seconds_total). Total may be 0 if unknown.
+ProgressCb = Callable[[float, float], None]
+
 
 def transcribe_audio(
     path: str | Path,
     backend: str = "faster-whisper",
     model: str = "base",
+    on_progress: Optional[ProgressCb] = None,
 ) -> Transcript:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
     if backend == "faster-whisper":
-        return _transcribe_local(path, model)
+        return _transcribe_local(path, model, on_progress)
     if backend == "openai":
-        return _transcribe_openai(path)
+        return _transcribe_openai(path, on_progress)
     raise ValueError(f"Unknown audio backend: {backend!r}")
 
 
-def _transcribe_local(path: Path, model: str) -> Transcript:
+def _transcribe_local(
+    path: Path, model: str, on_progress: Optional[ProgressCb] = None
+) -> Transcript:
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:  # pragma: no cover - environment dependent
@@ -48,15 +55,26 @@ def _transcribe_local(path: Path, model: str) -> Transcript:
         ) from exc
 
     whisper = WhisperModel(model, device="auto", compute_type="auto")
+    # transcribe() returns a lazy generator; segments are produced as the audio
+    # is decoded, so we can report progress against the known total duration.
     segments, info = whisper.transcribe(str(path), vad_filter=True)
-    result = [
-        TranscriptSegment(start=seg.start, end=seg.end, text=seg.text.strip())
-        for seg in segments
-    ]
+    total = float(getattr(info, "duration", 0.0) or 0.0)
+
+    result: list[TranscriptSegment] = []
+    for seg in segments:
+        result.append(
+            TranscriptSegment(start=seg.start, end=seg.end, text=seg.text.strip())
+        )
+        if on_progress and total:
+            on_progress(min(seg.end, total), total)
+    if on_progress and total:
+        on_progress(total, total)  # ensure we finish at 100%
     return Transcript(language=getattr(info, "language", None), segments=result)
 
 
-def _transcribe_openai(path: Path) -> Transcript:
+def _transcribe_openai(
+    path: Path, on_progress: Optional[ProgressCb] = None
+) -> Transcript:
     from openai import OpenAI
 
     try:
@@ -69,6 +87,7 @@ def _transcribe_openai(path: Path) -> Transcript:
 
     client = OpenAI(api_key=require_env("OPENAI_API_KEY"))
     audio = AudioSegment.from_file(path)
+    total = len(audio) / 1000.0
 
     segments: list[TranscriptSegment] = []
     for offset_ms in range(0, len(audio), _OPENAI_CHUNK_MS):
@@ -95,4 +114,7 @@ def _transcribe_openai(path: Path) -> Transcript:
                     text=seg["text"].strip(),
                 )
             )
+        if on_progress and total:
+            done = min((offset_ms + _OPENAI_CHUNK_MS) / 1000.0, total)
+            on_progress(done, total)
     return Transcript(language=getattr(audio, "language", None), segments=segments)

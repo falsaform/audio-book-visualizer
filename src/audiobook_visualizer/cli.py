@@ -114,7 +114,7 @@ def segment(
     chapter and paragraph plus audio timestamps, so pieces can be processed
     individually. No analysis or image generation.
     """
-    from .ingest import build_audiobook_structure, transcribe_audio
+    from .ingest import build_audiobook_structure
 
     load_env()
     config = Config.load(config_path)
@@ -125,9 +125,7 @@ def segment(
 
     try:
         _progress(f"Transcribing audio ({config.audio.backend}): {audio}")
-        transcript = transcribe_audio(
-            str(audio), backend=config.audio.backend, model=config.audio.model
-        )
+        transcript = _transcribe_with_progress(audio, config)
         _progress(f"  {len(transcript.segments)} transcript segment(s)")
         _progress("Segmenting into chapters and paragraphs")
         structure = build_audiobook_structure(
@@ -160,6 +158,49 @@ def _fmt_time(seconds: Optional[float]) -> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+
+
+def _transcribe_with_progress(audio: Path, config: Config):
+    """Transcribe with a live progress bar tracking audio position.
+
+    The bar advances as transcribed audio time approaches the file's duration,
+    so a long audiobook shows steady movement instead of a silent wait.
+    """
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+    )
+
+    from .ingest import transcribe_audio
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("elapsed •"),
+        TimeRemainingColumn(),
+        TextColumn("left"),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Transcribing", total=None)
+
+        def on_progress(done: float, total: float) -> None:
+            # total becomes known once decoding starts; set it then.
+            progress.update(task, total=total or None, completed=done)
+
+        return transcribe_audio(
+            str(audio),
+            backend=config.audio.backend,
+            model=config.audio.model,
+            on_progress=on_progress,
+        )
 
 
 @app.command()

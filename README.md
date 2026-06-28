@@ -95,9 +95,27 @@ inspect or pre-process the structure:
 just segment --audio book.m4b          # writes output/audiobook_structure.json
 ```
 
+Transcription is the slow step, so `segment` shows a live **progress bar** that
+advances with the audio position (with elapsed/remaining time). `visualize`
+reports the same progress as throttled percentage lines.
+
 `audiobook_structure.json` contains every chapter and paragraph with its audio
 start/end times. A full `visualize` run on an audiobook writes the same file
 alongside `analysis.json`.
+
+### Claude Code in the container
+
+The image ships the [Claude Code](https://claude.com/claude-code) CLI. Authenticate
+it with a `CLAUDE_CODE_OAUTH_TOKEN` (generate one with `claude setup-token` on a
+machine that has Claude Code; put it in `.env`, or export it in CI):
+
+```bash
+just claude                       # interactive session in the container
+just claude -p "explain src/audiobook_visualizer/pipeline.py"
+```
+
+The token is forwarded into the container from `.env` or the host environment by
+docker compose.
 
 ### Managing dependencies
 

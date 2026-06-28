@@ -10,6 +10,12 @@ services:
       # Optional so compose works before you create it; copy .env.example -> .env.
       - path: .env
         required: false
+    environment:
+      # Forward these from the host shell when set (CI, exported vars), in
+      # addition to whatever .env provides. `${VAR:-}` keeps them optional.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     working_dir: /app
     volumes:
       # Bind-mount the source for live editing. The installed venv lives at
