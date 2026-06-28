@@ -10,6 +10,7 @@ demuxer; nothing is held in memory, and encode progress is reported live.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -148,10 +149,18 @@ def compile_videos(
     fade: float = 0.5,
     ken_burns: bool = True,
     motion: Optional[Motion] = None,
+    force: bool = False,
     on_log: Optional[LogFn] = None,
     on_progress: Optional[ProgressFn] = None,
 ) -> tuple[list[Path], Optional[Path]]:
-    """Render one video per chunk + a master joining them. Returns (segments, master)."""
+    """Render one video per chunk + a master joining them. Returns (segments, master).
+
+    Each segment video carries a fingerprint of its inputs (the frame images and
+    the render settings). A segment is re-rendered only when that fingerprint
+    changes — i.e. a frame was regenerated, added/removed, or an option like
+    ``fps``/``motion`` differs. Pass ``force`` to rebuild everything regardless.
+    The master is rebuilt whenever any segment changed (or ``force``).
+    """
     log = on_log or (lambda _m: None)
     motion = motion or Motion()
     if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
@@ -169,24 +178,68 @@ def compile_videos(
         )
     log(f"{len(segments)} segment(s) with frames")
 
+    master = book_dir / "video.mp4"
     outputs: list[Path] = []
+    rebuilt = False
     for seg in segments:
         out = seg.chunk_dir / "video.mp4"
+        fp_path = seg.chunk_dir / "video.fingerprint"
+        fingerprint = _segment_fingerprint(seg, fps, fade, ken_burns, motion)
+        # Reuse the existing segment video only if its inputs are unchanged.
+        # The fingerprint covers the frame images (size + mtime) and the render
+        # settings, so a regenerated frame or a different option forces a rebuild.
+        if out.exists() and not force and _read_text(fp_path) == fingerprint:
+            log(f"Segment {seg.label}: unchanged, reusing existing video")
+            outputs.append(out)
+            continue
         log(
             f"Segment {seg.label}: {len(seg.cues)} frame(s), "
             f"{_fmt(seg.start)}–{_fmt(seg.end)} ({seg.duration / 60:.1f} min)"
         )
         _render_segment(seg, audio_files, fps, fade, ken_burns, motion, out, on_progress, log)
+        fp_path.write_text(fingerprint, encoding="utf-8")
         outputs.append(out)
+        rebuilt = True
 
-    # Master: concat the segment videos. If the only segment already lives at the
-    # book dir, it is the result.
+    # The single segment already lives at the book dir -> it is the result.
     if len(outputs) == 1 and segments[0].chunk_dir == book_dir:
         return outputs, outputs[0]
-    master = book_dir / "video.mp4"
+    # Rebuild the master only when a segment changed (the concat is otherwise stale-free).
+    if master.exists() and not rebuilt and not force:
+        log("All segments unchanged; master is up to date")
+        return outputs, master
     log(f"Joining {len(outputs)} segment(s) -> master")
     _concat_videos(outputs, master)
     return outputs, master
+
+
+def _segment_fingerprint(
+    seg: Segment, fps: int, fade: float, ken_burns: bool, motion: Motion
+) -> str:
+    """Digest of everything that determines a segment video: its frame images
+    (size + mtime, so a regenerated frame shows up), their timings, and the
+    render settings. Stored next to the video as ``video.fingerprint``."""
+    h = hashlib.sha256()
+    h.update(
+        f"v1|fps={fps}|fade={fade}|kb={ken_burns}|"
+        f"zoom={motion.zoom}|style={motion.style}|bias={motion.top_bias}|"
+        f"win={seg.start:.3f}-{seg.end:.3f}\n".encode()
+    )
+    for cue in seg.cues:
+        h.update(f"{cue.image.name}|{cue.start:.3f}|{cue.end:.3f}|".encode())
+        try:
+            st = cue.image.stat()
+            h.update(f"{st.st_size}|{st.st_mtime_ns}\n".encode())
+        except OSError:
+            h.update(b"missing\n")
+    return h.hexdigest()
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _render_segment(

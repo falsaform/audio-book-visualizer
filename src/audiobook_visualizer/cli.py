@@ -359,6 +359,9 @@ def video(
     motion: str = typer.Option(
         "out", "--motion", help="Ken Burns style: out|in|alternate ('out' never leaves a crop)."
     ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-render every segment video, even if its frames are unchanged."
+    ),
 ):
     """Compile generated frames + audio into timed videos (mp4).
 
@@ -403,7 +406,7 @@ def video(
 
             segments, master = compile_videos(
                 book_dir, str(audio), fps=fps, fade=fade, ken_burns=ken_burns,
-                motion=motion_cfg, on_log=on_log, on_progress=on_progress,
+                motion=motion_cfg, force=force, on_log=on_log, on_progress=on_progress,
             )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Video compilation failed:[/red] {exc}")

@@ -197,6 +197,48 @@ def test_compile_videos_requires_frames(tmp_path, monkeypatch):
         compile_videos(tmp_path / "empty", "/a.m4b")
 
 
+def test_segment_video_reused_until_frames_change(tmp_path, monkeypatch):
+    book = tmp_path / "swarm"
+    _chunk(book, "0000-60min", [("a_001_00", 60.0, 120.0)])
+    _chunk(book, "0060-120min", [("b_001_00", 3700.0, 3760.0)])
+
+    monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/audio/swarm.m4b")])
+    monkeypatch.setattr(video_mod, "audio_total_duration", lambda p: 9000.0)
+
+    rendered: list[str] = []
+
+    def fake_render(seg, audio_files, fps, fade, ken_burns, motion, out, on_progress, log):
+        rendered.append(seg.label)
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_bytes(b"MP4")
+
+    monkeypatch.setattr(video_mod, "_render_segment", fake_render)
+    monkeypatch.setattr(video_mod, "_concat_videos", lambda paths, out: Path(out).write_bytes(b"M"))
+
+    # First pass renders both segments and writes a fingerprint for each.
+    compile_videos(book, "/audio/swarm.m4b")
+    assert sorted(rendered) == ["0000-60min", "0060-120min"]
+    assert (book / "0000-60min" / "video.fingerprint").exists()
+
+    # Second pass: nothing changed -> no re-render.
+    rendered.clear()
+    compile_videos(book, "/audio/swarm.m4b")
+    assert rendered == []
+
+    # Regenerate one frame -> only that segment is rebuilt.
+    rendered.clear()
+    frame = book / "0000-60min" / "frames" / "a_001_00.png"
+    frame.write_bytes(b"\x89PNG-new-bytes-bigger")  # changed size -> new fingerprint
+    compile_videos(book, "/audio/swarm.m4b")
+    assert rendered == ["0000-60min"]
+
+    # force re-renders everything regardless of fingerprints.
+    rendered.clear()
+    compile_videos(book, "/audio/swarm.m4b", force=True)
+    assert sorted(rendered) == ["0000-60min", "0060-120min"]
+
+
 def test_single_chunk_at_book_dir_is_the_result(tmp_path, monkeypatch):
     book = tmp_path / "solo"
     _chunk(book, "", [("s1", 10.0, 20.0)])  # analysis.json directly in book dir

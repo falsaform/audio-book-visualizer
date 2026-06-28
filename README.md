@@ -341,6 +341,14 @@ also prompted with headroom so there's room to move. Stills are held for their
 full duration (`fps` filter, so the first image no longer flashes), with a gentle
 fade in/out per segment (`--fade`, default 0.5s).
 
+**Incremental re-runs.** Each segment video stores a fingerprint of its inputs
+(the frame images plus the render settings) alongside it as `video.fingerprint`.
+Re-running `just video` re-renders a segment only when that fingerprint changes —
+i.e. you regenerated a frame, added/removed one, or changed an option like
+`--fps`/`--zoom`/`--motion`. Untouched segments are reused, and the master is
+rebuilt only when some segment actually changed. Pass `--force` to re-render
+everything regardless.
+
 **Pacing** is governed by how many scenes the analyzer picks — denser scenes
 mean frames that track the narration more closely; tune
 `analysis.scenes_per_chunk` / `max_chars_per_chunk` (and re-run with
