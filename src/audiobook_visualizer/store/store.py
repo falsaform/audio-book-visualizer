@@ -323,6 +323,68 @@ class ProductionStore:
                 )
             s.commit()
 
+    def persist_screenplay(self, production_id: int, segment_id: int, scenes: list) -> None:
+        """Persist real screenplay scenes, each carrying one or more shots.
+
+        ``scenes`` are crew ``SceneDraft`` objects (each with ``.shots`` of
+        ``ShotDraft``). Replaces the segment's prior content. Shot ``order_index``
+        is a single running counter across the segment so reads stay correctly
+        ordered across scene boundaries; slugs encode scene/shot for stable frame
+        filenames.
+        """
+        self.clear_segment(segment_id)
+        char_ids = self._character_id_map(production_id)
+        prefix = self._segment_label(segment_id)
+        with self._write_lock, self.session() as s:
+            shot_order = 0
+            for si, scene in enumerate(scenes):
+                row = ScreenplayScene(
+                    segment_id=segment_id, order_index=si,
+                    slug=f"{prefix}_sc{si:03d}", synthetic=False,
+                    chapter=getattr(scene, "chapter", None),
+                    heading=scene.heading, title=scene.title, summary=scene.summary,
+                    setting=scene.setting, time_of_day=scene.time_of_day, mood=scene.mood,
+                    action=scene.action, source_excerpt=scene.source_excerpt,
+                    start_time=scene.start_time, end_time=scene.end_time,
+                )
+                s.add(row)
+                s.commit()
+                s.refresh(row)
+                scene_cids = self._link_ids(scene.characters_present, char_ids)
+                for cid in scene_cids:
+                    s.add(SceneCharacterLink(scene_id=int(row.id), character_id=cid))
+                for sj, shot in enumerate(scene.shots):
+                    shot_row = Shot(
+                        segment_id=segment_id, scene_id=int(row.id), order_index=shot_order,
+                        slug=f"{prefix}_sc{si:03d}_sh{sj:02d}",
+                        shot_type=shot.shot_type, camera_move=shot.camera_move,
+                        composition=shot.composition, subject=shot.subject,
+                        visual_description=shot.visual_description,
+                        duration_weight=shot.duration_weight,
+                        start_time=shot.start_time, end_time=shot.end_time,
+                    )
+                    s.add(shot_row)
+                    s.commit()
+                    s.refresh(shot_row)
+                    for cid in self._link_ids(shot.characters_present, char_ids):
+                        s.add(ShotCharacterLink(shot_id=int(shot_row.id), character_id=cid))
+                    shot_order += 1
+            s.commit()
+
+    def _segment_label(self, segment_id: int) -> str:
+        with self.session() as s:
+            seg = s.get(Segment, segment_id)
+            return seg.chunk_label if seg else "full"
+
+    @staticmethod
+    def _link_ids(mentions: list[str], char_ids: dict[str, int]) -> list[int]:
+        out: list[int] = []
+        for mention in mentions:
+            cid = char_ids.get(_norm(mention))
+            if cid is not None and cid not in out:
+                out.append(cid)
+        return out
+
     def _character_id_map(self, production_id: int) -> dict[str, int]:
         """name/alias (lowercased) -> character id."""
         out: dict[str, int] = {}

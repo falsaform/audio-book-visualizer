@@ -28,8 +28,9 @@ class AnalysisConfig(BaseModel):
     model: str = "claude-sonnet-4-6"
     # "scenes": Claude picks key visual moments per chunk. "paragraphs": one
     # frame per paragraph (or per `paragraphs_per_scene` paragraphs), timed
-    # exactly to the narration — needs an audiobook structure. Most narration-
-    # synced, but more frames/cost.
+    # exactly to the narration — needs an audiobook structure. "director": a crew
+    # of role-agents writes a screenplay and breaks it into shots with camera
+    # moves (see CrewConfig) — needs an audiobook structure.
     mode: str = "scenes"
     paragraphs_per_scene: int = 1
     # Smaller chunks + more scenes => denser frames that track the narration more
@@ -85,12 +86,52 @@ class OutputConfig(BaseModel):
     gallery: bool = True
 
 
+class RoleConfig(BaseModel):
+    """One configurable crew member (a sub-agent)."""
+
+    name: str
+    enabled: bool = True
+    model: str = "claude-sonnet-4-6"
+    # Turns the autonomous agent is allowed when crew.agent_mode is on (the
+    # staged path ignores it).
+    max_turns: int = 6
+    # Optional override of the role's default system prompt.
+    system_prompt: Optional[str] = None
+
+
+class DirectorTimingConfig(BaseModel):
+    # Shots aim for ~this many seconds; the director's shot count per scene is
+    # derived from the scene's duration, then clamped to [1, max_shots_per_scene].
+    target_seconds_per_shot: float = 8.0
+    min_shot_seconds: float = 3.0
+    max_shots_per_scene: int = 6
+
+
+def _default_roster() -> "list[RoleConfig]":
+    # The crew runs these in order. Script critic + continuity arrive in a later
+    # slice; add/disable/reorder roles here to "specify multiple sub agents".
+    return [RoleConfig(name="script_writer"), RoleConfig(name="director")]
+
+
+class CrewConfig(BaseModel):
+    # Off by default — the crew makes several LLM calls per segment.
+    enabled: bool = False
+    # Run each role as an autonomous multi-turn Claude Code agent (needs the
+    # claude CLI); otherwise a single structured call per role (works with an
+    # API key too). Both produce the same structured output.
+    agent_mode: bool = False
+    max_revisions: int = 2  # script-critic loop bound (used in a later slice)
+    roles: list[RoleConfig] = Field(default_factory=_default_roster)
+    timing: DirectorTimingConfig = Field(default_factory=DirectorTimingConfig)
+
+
 class Config(BaseModel):
     project: ProjectConfig = Field(default_factory=ProjectConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
+    crew: CrewConfig = Field(default_factory=CrewConfig)
 
     @classmethod
     def load(cls, path: Optional[str | Path] = None) -> "Config":

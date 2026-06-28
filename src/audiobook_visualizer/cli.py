@@ -107,6 +107,12 @@ def visualize(
         "--per-paragraph",
         help="One frame per paragraph timed to the narration (needs an audiobook).",
     ),
+    director: bool = typer.Option(
+        False,
+        "--director",
+        help="Crew mode: a screenwriter + director write a screenplay and break it "
+        "into shots with camera moves (needs an audiobook).",
+    ),
 ):
     """Run the full pipeline: ingest -> analyze -> generate frames -> gallery.
 
@@ -132,6 +138,9 @@ def visualize(
         config.audio.chapter_mode = chapter_mode
     if per_paragraph:
         config.analysis.mode = "paragraphs"
+    if director:  # director beats per-paragraph if both are given
+        config.analysis.mode = "director"
+        config.crew.enabled = True
 
     if not ebook and not audio and not structure:
         console.print("[red]Error:[/red] provide --ebook, --audio, and/or --structure.")

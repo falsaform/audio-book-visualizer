@@ -63,16 +63,28 @@ def _source_label(ebook_path, audio_path, structure_path) -> str:
     return "ebook"
 
 
-def _segment_window(chunk_label: str, scenes: list[Scene]) -> tuple[float, float]:
+def _window_from_span(chunk_label: str, span_start: float, span_end: float) -> tuple[float, float]:
     """The segment's audio window. Encoded in the chunk label (e.g. ``0000-60min``)
-    when present; otherwise the span the timestamped scenes cover."""
+    when present; otherwise the given content span."""
     if m := _WINDOW_RE.search(chunk_label):
         return float(m.group(1)) * 60.0, float(m.group(2)) * 60.0
-    ends = [s.end_time for s in scenes if s.end_time is not None]
     if m := _WINDOW_END_RE.search(chunk_label):
-        start = float(m.group(1)) * 60.0
-        return start, (max(ends) if ends else start)
+        return float(m.group(1)) * 60.0, span_end
+    return span_start, span_end
+
+
+def _segment_window(chunk_label: str, scenes: list[Scene]) -> tuple[float, float]:
     starts = [s.start_time for s in scenes if s.start_time is not None]
+    ends = [s.end_time for s in scenes if s.end_time is not None]
+    return _window_from_span(
+        chunk_label, min(starts) if starts else 0.0, max(ends) if ends else 0.0
+    )
+
+
+def _structure_span(structure: AudiobookStructure) -> tuple[float, float]:
+    paras = [p for ch in structure.chapters for p in ch.paragraphs]
+    starts = [p.start for p in paras if p.start is not None]
+    ends = [p.end for p in paras if p.end is not None]
     return (min(starts) if starts else 0.0), (max(ends) if ends else 0.0)
 
 
@@ -237,6 +249,40 @@ class Pipeline:
             self._progress("Aligning scenes to audio timestamps")
             align_scenes(analysis.scenes, transcript)
         return analysis
+
+    def _run_crew(
+        self, structure: AudiobookStructure, store: ProductionStore, production_id: int,
+        chunk_label: str, structure_path: Optional[str], known: list[Character],
+    ) -> int:
+        """Director mode: a crew (screenwriter -> director) turns the structure into
+        a screenplay broken into shots, persisted as real scenes/shots. Returns the
+        segment id."""
+        from .crew import AgentRunner, Crew
+
+        # Build (and accumulate) the character bible first — the crew needs it.
+        analyzer = Analyzer(self.config.analysis, on_progress=self._progress)
+        chunks = analyzer._chunk(structure.as_chapters)
+        self._progress(f"Building character bible from {len(chunks)} chunk(s)")
+        characters = analyzer._build_character_bible(chunks, known)
+        store.upsert_characters(production_id, characters)
+        characters = store.list_characters(production_id)
+
+        span_start, span_end = _structure_span(structure)
+        start, end = _window_from_span(chunk_label, span_start, span_end)
+        segment_id = store.get_or_create_segment(
+            production_id, chunk_label, start, end, structure_path
+        )
+
+        runner = AgentRunner(self.config.analysis, agent_mode=self.config.crew.agent_mode)
+        crew = Crew(self.config, runner, on_progress=self._progress)
+        self._progress("Crew: writing the screenplay and breaking it into shots")
+        scenes = crew.build(structure, characters)
+        store.persist_screenplay(production_id, segment_id, scenes)
+        total_shots = sum(len(s.shots) for s in scenes)
+        self._progress(
+            f"Persisted {len(scenes)} screenplay scene(s), {total_shots} shot(s) to production.db"
+        )
+        return segment_id
 
     def generate(
         self,
@@ -523,32 +569,33 @@ class Pipeline:
 
             # Continuity: seed analysis with the accumulated character bible.
             known = store.list_characters(production_id)
-            analysis = self.analyze(
-                ingested.chapters,
-                ingested.title,
-                ingested.author,
-                ingested.transcript,
-                ingested.structure,
-                id_prefix=chunk_label if chunk_label != "full" else "scene",
-                known_characters=known,
-            )
-
-            # Backfill production metadata now that we know it.
             store.get_or_create_production(
-                title=ingested.title or analysis.title,
-                author=ingested.author or analysis.author,
+                title=ingested.title, author=ingested.author,
                 source=_source_label(ebook_path, audio_path, structure_path),
                 style=self.config.project.style,
             )
-            # Persist: update the shared bible, create/refresh the segment, and store
-            # the analyzed scenes as shots (synthetic screenplay scenes in legacy modes).
-            store.upsert_characters(production_id, analysis.characters)
-            start, end = _segment_window(chunk_label, analysis.scenes)
-            segment_id = store.get_or_create_segment(
-                production_id, chunk_label, start, end, structure_path
-            )
-            store.persist_scenes_as_shots(production_id, segment_id, analysis.scenes)
-            self._progress(f"Persisted {len(analysis.scenes)} shot(s) to production.db")
+
+            if self.config.analysis.mode == "director" and ingested.structure is not None:
+                segment_id = self._run_crew(
+                    ingested.structure, store, production_id, chunk_label, structure_path, known
+                )
+            else:
+                if self.config.analysis.mode == "director":
+                    self._progress("  (director mode needs an audiobook structure; using scene mode)")
+                analysis = self.analyze(
+                    ingested.chapters, ingested.title, ingested.author,
+                    ingested.transcript, ingested.structure,
+                    id_prefix=chunk_label if chunk_label != "full" else "scene",
+                    known_characters=known,
+                )
+                store.upsert_characters(production_id, analysis.characters)
+                start, end = _segment_window(chunk_label, analysis.scenes)
+                segment_id = store.get_or_create_segment(
+                    production_id, chunk_label, start, end, structure_path
+                )
+                store.persist_scenes_as_shots(production_id, segment_id, analysis.scenes)
+                self._progress(f"Persisted {len(analysis.scenes)} shot(s) to production.db")
+
             # Reload so characters_present are canonicalised against the bible.
             analysis = store.load_segment_analysis(production_id, segment_id)
 

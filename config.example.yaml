@@ -13,8 +13,9 @@ analysis:
   # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
   provider: auto
   model: claude-sonnet-4-6        # text analysis model (characters/scenes)
-  mode: scenes                    # "scenes" (key moments) or "paragraphs"
-                                  # (one frame per paragraph, narration-timed; needs audio)
+  mode: scenes                    # "scenes" (key moments), "paragraphs" (one frame
+                                  # per paragraph, narration-timed), or "director"
+                                  # (crew writes a screenplay + shot list; needs audio)
   paragraphs_per_scene: 1         # paragraph mode: paragraphs per frame (raise to cut cost)
   # Smaller chunks + more scenes => denser frames that track the narration
   # (a frame every ~30s). Raise/lower to trade pacing against cost.
@@ -52,6 +53,26 @@ generation:
   portrait_size: 1024x1024        # portraits are square (avoids the widescreen face crop)
   shot_variety: true              # include the per-scene shot type (wide/close-up) in prompts
 
+# Director mode (analysis.mode: director): a crew of role-agents writes a
+# screenplay and breaks it into shots with camera moves. Off unless mode=director.
+crew:
+  enabled: false
+  agent_mode: false               # true = run each role as an autonomous multi-turn
+                                  # Claude Code agent (needs the claude CLI); false =
+                                  # one structured call per role (works with an API key)
+  max_revisions: 2                # script-critic loop bound (a later slice)
+  timing:
+    target_seconds_per_shot: 8.0  # shot count per scene is derived from its duration
+    min_shot_seconds: 3.0         # each shot gets at least this long when it fits
+    max_shots_per_scene: 6
+  roles:                          # the crew, run in order — add/disable/reorder these
+    - name: script_writer
+      model: claude-sonnet-4-6
+      max_turns: 6
+    - name: director
+      model: claude-sonnet-4-6
+      max_turns: 6
+
 output:
-  dir: output                     # frames, manifest.json and gallery.html land here
+  dir: output                     # production.db, frames and gallery.html land here
   gallery: true                   # build a browsable HTML gallery

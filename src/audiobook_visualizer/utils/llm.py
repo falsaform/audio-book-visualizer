@@ -115,6 +115,41 @@ class ClaudeCodeClient(_BaseClient):
             )
         return _extract_cli_result(proc.stdout)
 
+    def run_agent(
+        self,
+        system: str,
+        prompt: str,
+        max_turns: int = 6,
+        allowed_tools: str = "Read",
+        cwd: Optional[str] = None,
+    ) -> str:
+        """Run the CLI as an autonomous, multi-turn agent and return its final text.
+
+        Unlike :meth:`complete` (one turn, no tools), this lets the model reason
+        across up to ``max_turns`` turns and use the read-only tools in
+        ``allowed_tools`` (e.g. to read context files dropped in ``cwd``). The
+        caller still parses the final answer as JSON.
+        """
+        cmd = [
+            self._bin, "-p",
+            "--output-format", "json",
+            "--model", self.model,
+            "--max-turns", str(max(1, max_turns)),
+        ]
+        if allowed_tools:
+            cmd += ["--allowedTools", allowed_tools]
+        if system:
+            cmd += ["--append-system-prompt", system]
+        proc = subprocess.run(
+            cmd, input=prompt, capture_output=True, text=True, timeout=1800, cwd=cwd
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude agent failed (exit {proc.returncode}): "
+                f"{(proc.stderr or proc.stdout).strip()[:500]}"
+            )
+        return _extract_cli_result(proc.stdout)
+
 
 def _usable_key(value: Optional[str]) -> bool:
     """True for a real credential, False for empty or placeholder values.

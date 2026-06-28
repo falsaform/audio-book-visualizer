@@ -373,6 +373,30 @@ Set `analysis.mode: paragraphs` to make it the default, and
 `analysis.paragraphs_per_scene` to group N paragraphs per frame (raise it to cut
 the frame count / cost). Needs an audiobook structure (the paragraph timestamps).
 
+### Director mode (a crew of role-agents)
+
+Instead of one frame per scene/paragraph, **director mode** runs a small crew of
+role-agents that work like a film team: a **screenwriter** breaks the chapter into
+proper scenes (slug line, action, beats), then a **director** breaks each scene
+into a **shot list** — shot type, composition, and a **camera move** (`push_in`,
+`pull_out`, `pan_*`, `tilt_*`, `track_*`, `static`). One image is generated per
+shot.
+
+```bash
+just visualize --structure output/swarm/audiobook_structure_0000-60min.json --director
+```
+
+Each shot's exact start/end is pinned in Python (the director only suggests a
+relative weight per shot), so the shots **tile each scene's audio window** and the
+animatic stays in sync with the narration. Scenes, shots and their camera moves
+are persisted to `production.db`. Configure the roster under `crew:` — each role
+has its own `model`, `max_turns` and optional `system_prompt`, and `crew.agent_mode`
+runs each role as an autonomous multi-turn Claude Code agent (needs the `claude`
+CLI) rather than a single structured call. Needs an audiobook structure.
+
+> Camera moves are recorded now; rendering them as motion in the animatic, plus a
+> script-critic + continuity pass, land in the following slices.
+
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:
 
