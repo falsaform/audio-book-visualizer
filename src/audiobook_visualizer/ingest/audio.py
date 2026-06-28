@@ -39,22 +39,46 @@ def transcribe_audio(
     model: str = "base",
     on_progress: Optional[ProgressCb] = None,
     chunk_seconds: int = 600,
+    start: float = 0.0,
+    duration: Optional[float] = None,
 ) -> Transcript:
+    """Transcribe ``path`` (optionally only the window ``[start, start+duration]``).
+
+    ``start``/``duration`` are in seconds; timestamps in the result stay absolute
+    (relative to the original file) so a preview's times match a full run. A
+    window requires ffmpeg/ffprobe.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
 
+    have_ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
     total = _probe_duration(path)
-    # Chunk only when we can (ffmpeg + known duration) and it's worth it.
-    can_chunk = bool(
-        chunk_seconds and total and shutil.which("ffmpeg") and shutil.which("ffprobe")
-    )
-    chunk = chunk_seconds if can_chunk else 0
+
+    w_start = max(0.0, float(start or 0.0))
+    windowed = w_start > 0.0 or duration is not None
+    if windowed and not have_ffmpeg:
+        raise RuntimeError("Previewing a time window requires ffmpeg/ffprobe.")
+    if windowed and total and w_start >= total:
+        raise ValueError(
+            f"--start ({w_start / 60:.1f} min) is beyond the audio "
+            f"length ({total / 60:.1f} min)."
+        )
+    w_end = (w_start + float(duration)) if duration is not None else total
+    if total:
+        w_end = min(w_end, total) if w_end else total
+
+    # Chunking is required to extract a window; otherwise it's an optimization.
+    can_chunk = bool(chunk_seconds and total and have_ffmpeg)
+    if windowed:
+        chunk = chunk_seconds or 600
+    else:
+        chunk = chunk_seconds if can_chunk else 0
 
     if backend == "faster-whisper":
-        return _transcribe_local(path, model, on_progress, total, chunk)
+        return _transcribe_local(path, model, on_progress, w_start, w_end, chunk)
     if backend == "openai":
-        return _transcribe_openai(path, on_progress, total, chunk)
+        return _transcribe_openai(path, on_progress, w_start, w_end, chunk)
     raise ValueError(f"Unknown audio backend: {backend!r}")
 
 
@@ -65,7 +89,8 @@ def _transcribe_local(
     path: Path,
     model: str,
     on_progress: Optional[ProgressCb],
-    total: float,
+    w_start: float,
+    w_end: float,
     chunk_seconds: int,
 ) -> Transcript:
     try:
@@ -79,13 +104,14 @@ def _transcribe_local(
     whisper = WhisperModel(model, device="auto", compute_type="auto")
     segments: list[TranscriptSegment] = []
     language: Optional[str] = None
+    window_len = (w_end - w_start) if w_end else 0.0
 
     def transcribe_part(part: Path, offset: float) -> None:
         nonlocal language
         seg_iter, info = whisper.transcribe(str(part), vad_filter=True)
         language = language or getattr(info, "language", None)
-        # Without chunking we have no global total; fall back to this file's.
-        span = total or float(getattr(info, "duration", 0.0) or 0.0)
+        # Progress spans the window; fall back to this file's duration if unknown.
+        span = window_len or float(getattr(info, "duration", 0.0) or 0.0)
         for seg in seg_iter:
             segments.append(
                 TranscriptSegment(
@@ -95,24 +121,27 @@ def _transcribe_local(
                 )
             )
             if on_progress and span:
-                on_progress(min(seg.end + offset, span), span)
+                done = (seg.end + offset - w_start) if window_len else seg.end + offset
+                on_progress(min(done, span), span)
 
-    _drive(path, total, chunk_seconds, transcribe_part)
-    if on_progress and total:
-        on_progress(total, total)
+    _drive(path, w_start, w_end, chunk_seconds, transcribe_part)
+    if on_progress and window_len:
+        on_progress(window_len, window_len)
     return Transcript(language=language, segments=segments)
 
 
 def _transcribe_openai(
     path: Path,
     on_progress: Optional[ProgressCb],
-    total: float,
+    w_start: float,
+    w_end: float,
     chunk_seconds: int,
 ) -> Transcript:
     from openai import OpenAI
 
     client = OpenAI(api_key=require_env("OPENAI_API_KEY"))
     segments: list[TranscriptSegment] = []
+    window_len = (w_end - w_start) if w_end else 0.0
 
     def transcribe_part(part: Path, offset: float) -> None:
         with open(part, "rb") as fh:
@@ -130,13 +159,13 @@ def _transcribe_openai(
                     text=_seg_get(seg, "text").strip(),
                 )
             )
-        if on_progress and total:
-            done = min(offset + (chunk_seconds or total), total)
-            on_progress(done, total)
+        if on_progress and window_len:
+            done = min(offset - w_start + (chunk_seconds or window_len), window_len)
+            on_progress(done, window_len)
 
-    _drive(path, total, chunk_seconds, transcribe_part)
-    if on_progress and total:
-        on_progress(total, total)
+    _drive(path, w_start, w_end, chunk_seconds, transcribe_part)
+    if on_progress and window_len:
+        on_progress(window_len, window_len)
     return Transcript(segments=segments)
 
 
@@ -145,39 +174,42 @@ def _transcribe_openai(
 
 def _drive(
     path: Path,
-    total: float,
+    w_start: float,
+    w_end: float,
     chunk_seconds: int,
     handle: Callable[[Path, float], None],
 ) -> None:
-    """Feed ``handle(part_path, offset)`` either per-chunk or for the whole file."""
+    """Feed ``handle(part_path, offset)`` per-chunk over the window, or whole-file."""
     if not chunk_seconds:
         handle(path, 0.0)
         return
     with tempfile.TemporaryDirectory(prefix="abv-audio-") as workdir:
-        for part, offset in _iter_chunks(path, total, chunk_seconds, Path(workdir)):
+        for part, offset in _iter_chunks(path, w_start, w_end, chunk_seconds, Path(workdir)):
             handle(part, offset)
 
 
 def _iter_chunks(
-    path: Path, total: float, chunk_seconds: int, workdir: Path
+    path: Path, w_start: float, w_end: float, chunk_seconds: int, workdir: Path
 ) -> Iterator[tuple[Path, float]]:
-    """Extract one chunk at a time, yield ``(chunk_path, offset)``, then delete it.
+    """Extract the window ``[w_start, w_end)`` one chunk at a time.
 
-    Lazy extraction (one ffmpeg call per chunk with fast input seeking) keeps temp
-    disk bounded to a single chunk, not the whole re-encoded book.
+    Yields ``(chunk_path, offset)`` where ``offset`` is the chunk's absolute
+    position in the original file, then deletes the chunk. Lazy extraction (one
+    ffmpeg call per chunk with fast input seeking) keeps temp disk bounded to a
+    single chunk, not the whole re-encoded region.
     """
     idx = 0
-    start = 0.0
-    while start < total:
-        length = min(float(chunk_seconds), total - start)
+    pos = w_start
+    while pos < w_end:
+        length = min(float(chunk_seconds), w_end - pos)
         out = workdir / f"chunk_{idx:05d}.wav"
-        _extract_chunk(path, start, length, out)
+        _extract_chunk(path, pos, length, out)
         if out.exists() and out.stat().st_size > 0:
             try:
-                yield out, start
+                yield out, pos
             finally:
                 out.unlink(missing_ok=True)
-        start += chunk_seconds
+        pos += chunk_seconds
         idx += 1
 
 

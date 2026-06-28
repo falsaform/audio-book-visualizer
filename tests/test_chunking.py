@@ -4,6 +4,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 import audiobook_visualizer.ingest.audio as audio_mod
 
 
@@ -17,7 +19,7 @@ def test_iter_chunks_offsets_and_cleanup(monkeypatch, tmp_path):
     monkeypatch.setattr(audio_mod, "_extract_chunk", fake_extract)
 
     parts = []
-    for part, offset in audio_mod._iter_chunks(Path("in.m4b"), 25.0, 10.0, tmp_path):
+    for part, offset in audio_mod._iter_chunks(Path("in.m4b"), 0.0, 25.0, 10.0, tmp_path):
         parts.append((part.name, offset))
         assert part.exists()  # file is present while being handled
 
@@ -27,6 +29,21 @@ def test_iter_chunks_offsets_and_cleanup(monkeypatch, tmp_path):
     assert extracted[-1] == (20.0, 5.0)
     # Every chunk file is deleted after it is yielded.
     assert list(tmp_path.glob("chunk_*.wav")) == []
+
+
+def test_iter_chunks_window_keeps_absolute_offsets(monkeypatch, tmp_path):
+    extracted: list[tuple[float, float]] = []
+
+    def fake_extract(path, start, length, out):
+        extracted.append((start, length))
+        out.write_bytes(b"x")
+
+    monkeypatch.setattr(audio_mod, "_extract_chunk", fake_extract)
+
+    # Window minutes 1:00–1:15 (60s..75s) in 10s chunks.
+    offsets = [off for _, off in audio_mod._iter_chunks(Path("a"), 60.0, 75.0, 10.0, tmp_path)]
+    assert offsets == [60.0, 70.0]  # absolute file positions, not 0-based
+    assert extracted[-1] == (70.0, 5.0)  # last chunk clamped to window end
 
 
 def test_transcribe_local_stitches_offsets(monkeypatch):
@@ -101,3 +118,49 @@ def test_no_chunk_when_ffmpeg_missing(monkeypatch):
     tr = audio_mod.transcribe_audio("book.m4b", backend="faster-whisper", chunk_seconds=10)
     assert len(tr.segments) == 1
     assert seen and seen[0][1] == 0.0
+
+
+def test_preview_window_uses_absolute_timestamps(monkeypatch):
+    """A --start/--duration window transcribes only that slice, absolute times."""
+
+    class FakeSeg:
+        def __init__(self, s, e, t):
+            self.start, self.end, self.text = s, e, t
+
+    class FakeInfo:
+        duration = 10.0
+        language = "en"
+
+    class FakeModel:
+        def __init__(self, *a, **k):
+            pass
+
+        def transcribe(self, path, **k):
+            return iter([FakeSeg(0.0, 1.0, "a"), FakeSeg(1.0, 2.0, "b")]), FakeInfo()
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeModel))
+    monkeypatch.setattr(audio_mod, "_probe_duration", lambda p: 120.0)
+    monkeypatch.setattr(audio_mod.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(audio_mod.Path, "exists", lambda self: True)
+    monkeypatch.setattr(audio_mod, "_extract_chunk", lambda p, s, length, out: out.write_bytes(b"x"))
+
+    progress: list[tuple[float, float]] = []
+    tr = audio_mod.transcribe_audio(
+        "book.m4b", backend="faster-whisper", chunk_seconds=10,
+        start=60.0, duration=20.0,
+        on_progress=lambda d, t: progress.append((d, t)),
+    )
+
+    # Window [60, 80] -> 2 chunks at absolute offsets 60 and 70.
+    assert [s.start for s in tr.segments] == [60.0, 61.0, 70.0, 71.0]
+    # Progress spans the 20s window (not the 120s file) and ends at 100%.
+    assert progress[-1] == (20.0, 20.0)
+    assert all(t == 20.0 for _, t in progress)
+
+
+def test_preview_window_requires_ffmpeg(monkeypatch):
+    monkeypatch.setattr(audio_mod, "_probe_duration", lambda p: 120.0)
+    monkeypatch.setattr(audio_mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(audio_mod.Path, "exists", lambda self: True)
+    with pytest.raises(RuntimeError, match="requires ffmpeg"):
+        audio_mod.transcribe_audio("book.m4b", start=60.0, duration=10.0)

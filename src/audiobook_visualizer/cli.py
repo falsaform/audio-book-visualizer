@@ -155,12 +155,25 @@ def segment(
     chapter_mode: Optional[str] = typer.Option(
         None, "--chapter-mode", help="auto|markers|headings|time|single."
     ),
+    start: float = typer.Option(
+        0.0, "--start", help="Preview start offset, in MINUTES (default 0)."
+    ),
+    duration: Optional[float] = typer.Option(
+        None,
+        "--duration",
+        "-d",
+        help="Preview length, in MINUTES. Omit to process to the end. "
+        "Use a small value (e.g. -d 10) to iterate fast on large files.",
+    ),
 ):
     """Transcribe an audiobook and segment it into chapters + paragraphs.
 
     Audiobook-only and API-free: writes audiobook_structure.json with each
     chapter and paragraph plus audio timestamps, so pieces can be processed
     individually. No analysis or image generation.
+
+    Use --start/--duration (in minutes) to preview just a slice of a long file
+    and iterate quickly, e.g. `abv segment -a book.m4b --start 60 -d 10`.
     """
     from .ingest import build_audiobook_structure
 
@@ -171,9 +184,16 @@ def segment(
     if chapter_mode is not None:
         config.audio.chapter_mode = chapter_mode
 
+    start_s = max(0.0, start) * 60.0
+    duration_s = duration * 60.0 if duration is not None else None
+
     try:
-        _progress(f"Transcribing audio ({config.audio.backend}): {audio}")
-        transcript = _transcribe_with_progress(audio, config)
+        where = config.audio.backend
+        if start_s or duration_s is not None:
+            end_label = f"{start + (duration or 0):g}" if duration is not None else "end"
+            _progress(f"Preview window: minutes {start:g}–{end_label}")
+        _progress(f"Transcribing audio ({where}): {audio}")
+        transcript = _transcribe_with_progress(audio, config, start_s, duration_s)
         _progress(f"  {len(transcript.segments)} transcript segment(s)")
         _progress("Segmenting into chapters and paragraphs")
         structure = build_audiobook_structure(
@@ -208,7 +228,9 @@ def _fmt_time(seconds: Optional[float]) -> str:
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
 
 
-def _transcribe_with_progress(audio: Path, config: Config):
+def _transcribe_with_progress(
+    audio: Path, config: Config, start: float = 0.0, duration: Optional[float] = None
+):
     """Transcribe with a live progress bar tracking audio position.
 
     The bar advances as transcribed audio time approaches the file's duration,
@@ -249,6 +271,8 @@ def _transcribe_with_progress(audio: Path, config: Config):
             model=config.audio.model,
             on_progress=on_progress,
             chunk_seconds=config.audio.chunk_seconds,
+            start=start,
+            duration=duration,
         )
 
 

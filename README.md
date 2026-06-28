@@ -109,6 +109,17 @@ inspect or pre-process the structure:
 just segment --audio book.m4b          # writes output/audiobook_structure.json
 ```
 
+**Preview a slice to iterate fast.** Transcribing a 12h book just to check your
+segmentation tweaks is painful, so `segment` takes a `--start`/`--duration`
+window **in minutes**. Only that slice is extracted (via ffmpeg seeking) and
+transcribed; timestamps stay absolute (relative to the original file), so the
+preview matches what a full run would produce for that region:
+
+```bash
+just segment --audio book.m4b -d 10              # first 10 minutes
+just segment --audio book.m4b --start 60 -d 15   # minutes 60–75
+```
+
 Transcription is the slow step, so `segment` shows a live **progress bar** that
 advances with the audio position (with elapsed/remaining time). `visualize`
 reports the same progress as throttled percentage lines.
