@@ -58,6 +58,11 @@ visualize *args:
 segment *args:
     {{run}} abv segment {{args}}
 
+# Compile rendered frames + audio into a timed mp4
+# e.g. `just video --audio book.m4b --dir output/legion`
+video *args:
+    {{run}} abv video {{args}}
+
 # Offline demo on the bundled sample (stub frames, no image API; needs ANTHROPIC_API_KEY)
 demo:
     {{run}} abv visualize --ebook examples/sample.txt --dry-run --max-frames 4

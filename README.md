@@ -297,6 +297,21 @@ selecting one shows its metadata, reference portraits, and an editable prompt
 with a **Regenerate** button. The manifest is updated in place. Locally (outside
 Docker) install the extra: `pip install -e '.[web]'`.
 
+## Video
+
+Compile the rendered frames + the audiobook into a timed **mp4** — each frame is
+shown during its scene's time span, synced to the audio:
+
+```bash
+just video --audio book.m4b --dir output/legion           # -> output/legion/video.mp4
+just video --audio "audiobooks/Moby Dick/" --dir output/moby-dick -o moby.mp4
+```
+
+It gathers every chunk's frames and their scene timestamps under `--dir`, orders
+them by time, and muxes against the audio (a single `.m4b` or a folder of `.mp3`
+parts — the parts are concatenated on the same timeline the timestamps live on).
+Run `visualize` first so frames have timestamps; needs `ffmpeg` (in the image).
+
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:
 

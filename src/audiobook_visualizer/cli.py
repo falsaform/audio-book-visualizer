@@ -323,6 +323,41 @@ def join(
     )
 
 
+@app.command()
+def video(
+    audio: Path = typer.Option(
+        ..., "--audio", "-a", help="Audiobook file or folder (the audio track)."
+    ),
+    dir: Optional[Path] = typer.Option(
+        None, "--dir", "-d", help="Book output dir with rendered frames (default: config output)."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Output mp4 path (default: <dir>/video.mp4)."
+    ),
+    config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config.yaml."),
+    fps: int = typer.Option(24, "--fps", help="Output frame rate."),
+):
+    """Compile generated frames + audio into a timed video (mp4).
+
+    Each frame is shown during its scene's time span, synced to the audio (one
+    m4b or a folder of mp3s). Run `visualize` first so frames have timestamps.
+    """
+    from .video import compile_video
+
+    load_env()
+    config = Config.load(config_path)
+    book_dir = dir if dir is not None else Path(config.output.dir)
+    out_path = out if out is not None else (book_dir / "video.mp4")
+
+    try:
+        result = compile_video(book_dir, str(audio), out_path, fps=fps, on_progress=_progress)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Video compilation failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]✓[/green] Wrote video -> [underline]{result}[/underline]")
+
+
 def _transcribe_with_progress(
     audio: Path, config: Config, start: float = 0.0, duration: Optional[float] = None
 ):

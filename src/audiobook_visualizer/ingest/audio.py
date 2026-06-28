@@ -71,6 +71,11 @@ def _build_timeline(files: list[Path]) -> tuple[list[TimelineItem], float]:
     return timeline, cursor
 
 
+def audio_total_duration(path: str | Path) -> float:
+    """Total duration (seconds) of a file or a folder of parts (via ffprobe)."""
+    return sum(_probe_duration(f) for f in gather_audio_files(path))
+
+
 def audio_file_boundaries(path: str | Path) -> Optional[list[tuple[str, float, float]]]:
     """Chapter boundaries from a multi-file audiobook (one chapter per file).
 
