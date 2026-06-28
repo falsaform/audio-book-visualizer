@@ -22,6 +22,7 @@ def render_gallery(view: ProductionView | None, out_dir: Path) -> Path:
 
     cards = []
     ok_count = 0
+    last_heading = None
     for shot in shots:
         frame = shot.frame
         title = html.escape(shot.title or shot.slug)
@@ -29,6 +30,17 @@ def render_gallery(view: ProductionView | None, out_dir: Path) -> Path:
         chapter = html.escape(shot.chapter or "")
         ts = _fmt_time(shot.start_time)
         meta_bits = " · ".join(b for b in [chapter, ts] if b)
+
+        # In director mode, group the shots under their scene's slug line.
+        heading = shot.heading or ""
+        if heading and heading != last_heading:
+            cards.append(f'<h2 class="section">{html.escape(heading)}</h2>')
+            last_heading = heading
+
+        badges = " ".join(
+            f'<span class="badge">{html.escape(b)}</span>'
+            for b in [shot.shot_type, shot.camera_move] if b
+        )
 
         if frame and frame.ok and frame.image_path:
             ok_count += 1
@@ -49,6 +61,7 @@ def render_gallery(view: ProductionView | None, out_dir: Path) -> Path:
           <figcaption>
             <h3>{title}</h3>
             <p class="meta">{meta_bits}</p>
+            {f'<p class="badges">{badges}</p>' if badges else ''}
             <p class="summary">{summary}</p>
           </figcaption>
         </figure>"""
@@ -90,7 +103,13 @@ _TEMPLATE = """<!doctype html>
   figcaption {{ padding: .85rem 1rem 1.1rem; }}
   figcaption h3 {{ margin:0 0 .3rem; font-size:1.05rem; }}
   .meta {{ margin:0 0 .5rem; color:#7aa; font-size:.8rem; }}
+  .badges {{ margin:0 0 .5rem; display:flex; flex-wrap:wrap; gap:.3rem; }}
+  .badge {{ background:#233; color:#9cd; padding:.1rem .45rem; border-radius:6px;
+            font-size:.72rem; text-transform:uppercase; letter-spacing:.03em; }}
   .summary {{ margin:0; color:#bbb; font-size:.9rem; line-height:1.4; }}
+  .section {{ grid-column: 1 / -1; margin:.5rem 0 -.25rem; padding-bottom:.4rem;
+              border-bottom:1px solid #333; color:#cdd; font-size:1rem;
+              font-family: ui-monospace, monospace; letter-spacing:.02em; }}
 </style>
 </head>
 <body>

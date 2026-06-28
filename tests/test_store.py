@@ -122,6 +122,38 @@ def test_persist_screenplay_keeps_multi_shot_scenes_and_revision(tmp_path):
     assert view.shots[1].characters_present == ["Ahab"]
 
 
+def test_update_shot_edits_fields(tmp_path):
+    store, pid = _store(tmp_path)
+    sid = store.get_or_create_segment(pid, "full", 0.0, 100.0)
+    store.persist_scenes_as_shots(pid, sid, [Scene(id="s1", visual_description="old")])
+    assert store.update_shot(sid, "s1", {"visual_description": "new", "camera_move": "push_in"})
+    shot = store.segment_view(sid).shots[0]
+    assert shot.visual_description == "new" and shot.camera_move == "push_in"
+    assert store.update_shot(sid, "missing", {"camera_move": "static"}) is False
+
+
+def test_split_shot_halves_window_and_copies_fields(tmp_path):
+    store, pid = _store(tmp_path)
+    sid = store.get_or_create_segment(pid, "full", 0.0, 100.0)
+    store.upsert_characters(pid, [Character(name="Ahab", description="x")])
+    store.persist_scenes_as_shots(pid, sid, [
+        Scene(id="s1", visual_description="deck", camera_move="", characters_present=["Ahab"],
+              start_time=0.0, end_time=100.0),
+    ])
+    store.update_shot(sid, "s1", {"camera_move": "pan_left"})
+    result = store.split_shot(sid, "s1", at=0.5)
+    assert result == ("s1", "s1-2")
+    shots = store.segment_view(sid).shots
+    assert [(s.slug, s.start_time, s.end_time) for s in shots] == [
+        ("s1", 0.0, 50.0), ("s1-2", 50.0, 100.0)
+    ]
+    # The new half inherits the edited move + characters, and order is contiguous.
+    assert all(s.camera_move == "pan_left" for s in shots)
+    assert shots[1].characters_present == ["Ahab"]
+    assert [s.order_index for s in shots] == [0, 1]
+    assert store.split_shot(sid, "nope") is None
+
+
 def test_load_segment_analysis_roundtrips_render_units(tmp_path):
     store, pid = _store(tmp_path)
     sid = store.get_or_create_segment(pid, "full", 0.0, 100.0)

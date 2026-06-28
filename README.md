@@ -314,9 +314,16 @@ just web --dry-run             # regenerate with the offline stub provider (no A
 ```
 
 It reads an existing run's `production.db`, so do a `visualize` (or `visualize
---analyze-only`) first. The page lists every scene; selecting one shows its
-metadata, reference portraits, and an editable prompt with a **Regenerate**
-button. The new frame is persisted to the store. Locally (outside Docker) install
+--analyze-only`) first. The page lists every shot; selecting one shows its image,
+the **source narration** it was drawn from, and the exact **prompt** sent to the
+image model. From there you can:
+
+- **edit the shot** — its visual description, **camera move**, and shot type;
+- **split a shot** into two halves and edit each independently;
+- **re-render** the frame (optionally with a hand-edited prompt or style override).
+
+All edits and the new frames are persisted to the store, and any continuity notes
+from director mode show as a badge in the header. Locally (outside Docker) install
 the extra: `pip install -e '.[web]'`.
 
 ## Video

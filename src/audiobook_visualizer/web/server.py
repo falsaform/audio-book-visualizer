@@ -16,6 +16,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from ..config import Config
+from ..generation import build_prompt
 from ..models import Frame
 from ..pipeline import Pipeline
 from ..store import ProductionStore
@@ -27,6 +28,18 @@ class RegenerateRequest(BaseModel):
     # annotation as a request body under `from __future__ import annotations`.
     prompt: Optional[str] = None
     style: Optional[str] = None
+
+
+class UpdateShotRequest(BaseModel):
+    visual_description: Optional[str] = None
+    camera_move: Optional[str] = None
+    shot_type: Optional[str] = None
+    composition: Optional[str] = None
+    subject: Optional[str] = None
+
+
+class SplitShotRequest(BaseModel):
+    at: Optional[float] = None  # split point as a fraction of the shot (0..1)
 
 
 def _resolve_book_dir(out_dir: Path) -> tuple[Path, str]:
@@ -87,15 +100,34 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
                 urls.append(f"/portraits/{name}")
         return urls
 
-    def shot_payload(shot) -> dict:
+    def shot_payload(shot, analysis) -> dict:
         frame = shot.frame
+        scene = shot.to_scene()
+        # The effective prompt: the one that produced the current image, or — for an
+        # unrendered/edited shot — the prompt that would be built from its fields.
+        if frame and frame.prompt:
+            prompt = frame.prompt
+        else:
+            prompt = build_prompt(
+                scene, analysis, config.project.style,
+                include_shot=config.generation.shot_variety,
+            )
         return {
-            **shot.to_scene().model_dump(),
+            **scene.model_dump(),
             "camera_move": shot.camera_move,
+            "prompt": prompt,
             "frame": frame.model_dump() if frame else None,
             "image_url": image_url(frame),
             "reference_urls": ref_urls(frame),
         }
+
+    def one_shot(pid: int, seg_id: int, slug: str) -> dict:
+        analysis = store.load_segment_analysis(pid, seg_id)
+        seg = store.segment_view(seg_id)
+        shot = next((s for s in (seg.shots if seg else []) if s.slug == slug), None)
+        if shot is None:
+            raise HTTPException(404, f"Unknown shot: {slug}")
+        return shot_payload(shot, analysis)
 
     # -- routes -------------------------------------------------------------
 
@@ -106,6 +138,7 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
     @app.get("/api/state")
     def state() -> dict:
         pid, seg_id = _ids()
+        analysis = store.load_segment_analysis(pid, seg_id)
         view = store.production_view(pid)
         seg = store.segment_view(seg_id)
         shots = seg.shots if seg else []
@@ -115,7 +148,11 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
             "provider": "stub (dry-run)" if dry_run else config.generation.provider,
             "style": config.project.style,
             "characters": [c.model_dump() for c in (view.characters if view else [])],
-            "scenes": [shot_payload(s) for s in shots],
+            "continuity": [
+                {"severity": n.severity, "category": n.category, "message": n.message}
+                for n in store.list_continuity_notes(seg_id)
+            ],
+            "scenes": [shot_payload(s, analysis) for s in shots],
         }
 
     @app.post("/api/scenes/{scene_id}/regenerate")
@@ -133,11 +170,21 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
             raise HTTPException(404, f"Unknown scene: {scene_id}")
         if not frame.ok:
             raise HTTPException(502, frame.error or "Image generation failed.")
+        return one_shot(pid, seg_id, scene_id)
 
-        seg = store.segment_view(seg_id)
-        shot = next((s for s in (seg.shots if seg else []) if s.slug == scene_id), None)
-        if shot is None:
-            raise HTTPException(404, f"Unknown scene: {scene_id}")
-        return shot_payload(shot)
+    @app.post("/api/shots/{slug}/update")
+    def update_shot(slug: str, req: UpdateShotRequest) -> dict:
+        pid, seg_id = _ids()
+        if not store.update_shot(seg_id, slug, req.model_dump(exclude_none=True)):
+            raise HTTPException(404, f"Unknown shot: {slug}")
+        return one_shot(pid, seg_id, slug)
+
+    @app.post("/api/shots/{slug}/split")
+    def split_shot(slug: str, req: SplitShotRequest) -> dict:
+        pid, seg_id = _ids()
+        result = store.split_shot(seg_id, slug, req.at if req.at is not None else 0.5)
+        if result is None:
+            raise HTTPException(404, f"Unknown shot: {slug}")
+        return {"shots": [one_shot(pid, seg_id, s) for s in result]}
 
     return app

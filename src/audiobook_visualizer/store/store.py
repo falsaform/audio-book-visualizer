@@ -415,6 +415,67 @@ class ProductionStore:
             s.add(SceneCharacterLink(scene_id=scene_id, character_id=cid))
             s.add(ShotCharacterLink(shot_id=shot_id, character_id=cid))
 
+    _EDITABLE_SHOT_FIELDS = (
+        "visual_description", "camera_move", "shot_type", "composition", "subject",
+    )
+
+    def update_shot(self, segment_id: int, slug: str, fields: dict) -> bool:
+        """Edit a shot's creative fields (from the web UI). Returns False if unknown."""
+        with self._write_lock, self.session() as s:
+            shot = s.exec(
+                select(Shot).where(Shot.segment_id == segment_id, Shot.slug == slug)
+            ).first()
+            if shot is None:
+                return False
+            for key in self._EDITABLE_SHOT_FIELDS:
+                if key in fields and fields[key] is not None:
+                    setattr(shot, key, str(fields[key]))
+            s.add(shot)
+            s.commit()
+        return True
+
+    def split_shot(self, segment_id: int, slug: str, at: float = 0.5) -> Optional[tuple[str, str]]:
+        """Split one shot's time window in two. The original keeps ``[start, mid]``;
+        a new shot (same creative fields + character links) takes ``[mid, end]``.
+        Returns ``(original_slug, new_slug)`` or ``None`` if the shot is unknown."""
+        at = min(0.9, max(0.1, at))
+        with self._write_lock, self.session() as s:
+            shot = s.exec(
+                select(Shot).where(Shot.segment_id == segment_id, Shot.slug == slug)
+            ).first()
+            if shot is None:
+                return None
+            start = shot.start_time if shot.start_time is not None else 0.0
+            end = shot.end_time if shot.end_time is not None else start
+            mid = start + (end - start) * at
+            existing = set(s.exec(
+                select(Shot.slug).where(Shot.segment_id == segment_id)).all())
+            new_slug = _unique_slug(slug, existing)
+            new = Shot(
+                segment_id=segment_id, scene_id=shot.scene_id, order_index=shot.order_index,
+                slug=new_slug, shot_type=shot.shot_type, camera_move=shot.camera_move,
+                composition=shot.composition, subject=shot.subject,
+                visual_description=shot.visual_description,
+                duration_weight=shot.duration_weight, start_time=mid, end_time=end,
+            )
+            shot.end_time = mid
+            s.add(shot)
+            s.add(new)
+            s.commit()
+            s.refresh(new)
+            for cid in s.exec(select(ShotCharacterLink.character_id).where(
+                    ShotCharacterLink.shot_id == shot.id)).all():
+                s.add(ShotCharacterLink(shot_id=int(new.id), character_id=cid))
+            s.commit()
+            # Renumber the segment's shots so order_index follows the timeline again.
+            shots = s.exec(select(Shot).where(Shot.segment_id == segment_id)).all()
+            for i, sh in enumerate(sorted(
+                    shots, key=lambda r: (r.start_time if r.start_time is not None else 0.0, r.slug))):
+                sh.order_index = i
+                s.add(sh)
+            s.commit()
+        return (slug, new_slug)
+
     def has_shots(self, segment_id: int) -> bool:
         with self.session() as s:
             return s.exec(select(Shot.id).where(Shot.segment_id == segment_id)).first() is not None
@@ -565,6 +626,14 @@ class ProductionStore:
 
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _unique_slug(base: str, existing: set[str]) -> str:
+    for n in range(2, 1000):
+        candidate = f"{base}-{n}"
+        if candidate not in existing:
+            return candidate
+    return f"{base}-x"
 
 
 def _enable_sqlite_pragmas(engine) -> None:
