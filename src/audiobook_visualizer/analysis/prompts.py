@@ -72,6 +72,9 @@ Return a JSON array of objects with exactly these keys:
 - "setting": where it takes place (location, interior/exterior)
 - "time_of_day": e.g. "dawn", "midday", "night", or "" if unclear
 - "mood": the emotional/visual tone (e.g. "tense", "serene", "ominous")
+- "shot_type": the camera framing that best serves this moment, e.g. "wide
+  establishing shot", "medium shot", "close-up", "over-the-shoulder shot".
+  Vary it across moments for visual rhythm.
 - "characters_present": array of character names visible in the frame (may be empty)
 - "visual_description": a rich 2-4 sentence description of exactly what the frame
   shows, written for an image generator

@@ -101,6 +101,7 @@ class Scene(BaseModel):
     setting: str = ""
     time_of_day: str = ""
     mood: str = ""
+    shot_type: str = ""  # e.g. "wide establishing shot", "close-up"
     characters_present: list[str] = Field(default_factory=list)
     visual_description: str = ""
     source_excerpt: str = ""
@@ -117,6 +118,8 @@ class Frame(BaseModel):
     image_path: Optional[str] = None
     provider: str = ""
     model: str = ""
+    references: list[str] = Field(default_factory=list)
+    cached: bool = False
     error: Optional[str] = None
 
     @property

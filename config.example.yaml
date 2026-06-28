@@ -34,12 +34,16 @@ audio:
   paragraph_max_chars: 1500       # hard cap so paragraphs stay bounded
 
 generation:
-  provider: openai
-  model: dall-e-3                 # dall-e-3 or dall-e-2
+  provider: openai                # openai (DALL-E) | gemini (Nano Banana) | stub
+  model: dall-e-3                 # dall-e-3/dall-e-2; for gemini: gemini-2.5-flash-image
   size: 1792x1024                 # dall-e-3 widescreen; use 1024x1024 for dall-e-2
   quality: standard               # standard | hd  (dall-e-3 only)
   max_frames: 0                   # 0 = generate a frame for every scene; >0 caps it
   concurrency: 3                  # parallel image requests
+  cache: true                     # reuse unchanged frames across runs
+  character_portraits: true       # render a per-character portrait and feed it as a
+                                  # reference for consistency (gemini; ignored by DALL-E)
+  shot_variety: true              # include the per-scene shot type (wide/close-up) in prompts
 
 output:
   dir: output                     # frames, manifest.json and gallery.html land here

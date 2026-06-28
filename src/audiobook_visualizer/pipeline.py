@@ -19,11 +19,35 @@ from .analysis import Analyzer
 from .analysis.align import align_scenes, align_scenes_to_structure
 from .config import Config
 from .gallery import render_gallery
-from .generation import build_prompt, get_provider
+from .generation import build_portrait_prompt, build_prompt, cache, get_provider
 from .ingest import build_audiobook_structure, load_ebook, transcribe_audio
-from .models import AudiobookStructure, BookAnalysis, Frame, Transcript
+from .models import AudiobookStructure, BookAnalysis, Frame, Scene, Transcript
 
 ProgressFn = Callable[[str], None]
+
+
+def _slug(name: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in name.strip().lower()).strip("_") or "x"
+
+
+def _scene_references(
+    scene: Scene, analysis: BookAnalysis, portraits: dict[str, Path]
+) -> list[Path]:
+    """Portrait paths for characters present in a scene (deduped, canonical)."""
+    seen: set[str] = set()
+    refs: list[Path] = []
+    for mention in scene.characters_present:
+        char = analysis.character(mention)
+        keys = [mention.lower()]
+        if char:
+            keys = [char.name.lower(), *(a.lower() for a in char.aliases)]
+        for key in keys:
+            path = portraits.get(key)
+            if path and str(path) not in seen:
+                seen.add(str(path))
+                refs.append(path)
+                break
+    return refs
 
 
 @dataclass
@@ -131,7 +155,11 @@ class Pipeline:
         return analysis
 
     def generate(
-        self, analysis: BookAnalysis, out_dir: Path, dry_run: bool = False
+        self,
+        analysis: BookAnalysis,
+        out_dir: Path,
+        dry_run: bool = False,
+        force: bool = False,
     ) -> list[Frame]:
         gen_cfg = self.config.generation
         provider = get_provider(gen_cfg, dry_run=dry_run)
@@ -141,30 +169,52 @@ class Pipeline:
         scenes = analysis.scenes
         if gen_cfg.max_frames > 0:
             scenes = scenes[: gen_cfg.max_frames]
+
+        # Character portraits (consistency) — only when the provider can use them,
+        # and only for characters that appear in the frames we're about to render.
+        portraits: dict[str, Path] = {}
+        if gen_cfg.character_portraits and provider.supports_references:
+            needed = {m.lower() for s in scenes for m in s.characters_present}
+            portraits = self._generate_portraits(analysis, provider, out_dir, force, needed)
+
         self._progress(
             f"Generating {len(scenes)} frame(s) via "
             f"{'stub (dry-run)' if dry_run else provider.name}"
         )
 
-        # Build prompts up front (cheap, deterministic).
-        jobs = [
-            (scene, build_prompt(scene, analysis, self.config.project.style))
-            for scene in scenes
-        ]
+        use_refs = provider.supports_references and bool(portraits)
+        jobs = []
+        for scene in scenes:
+            prompt = build_prompt(
+                scene,
+                analysis,
+                self.config.project.style,
+                include_shot=gen_cfg.shot_variety,
+                with_references=use_refs,
+            )
+            refs = _scene_references(scene, analysis, portraits) if use_refs else []
+            jobs.append((scene, prompt, refs))
 
         frames: list[Frame] = []
         workers = max(1, gen_cfg.concurrency)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_map = {
-                pool.submit(self._render_one, provider, scene, prompt, frames_dir): scene
-                for scene, prompt in jobs
+                pool.submit(
+                    self._render_one, provider, scene, prompt, refs, frames_dir, force
+                ): scene
+                for scene, prompt, refs in jobs
             }
             done = 0
             for future in as_completed(future_map):
                 frame = future.result()
                 frames.append(frame)
                 done += 1
-                status = "ok" if frame.ok else f"FAILED ({frame.error})"
+                if frame.cached:
+                    status = "cached"
+                elif frame.ok:
+                    status = "ok"
+                else:
+                    status = f"FAILED ({frame.error})"
                 self._progress(f"  [{done}/{len(jobs)}] {frame.scene_id}: {status}")
 
         # Restore scene order (futures complete out of order).
@@ -172,11 +222,71 @@ class Pipeline:
         frames.sort(key=lambda f: order.get(f.scene_id, 1_000_000))
         return frames
 
-    def _render_one(self, provider, scene, prompt: str, frames_dir: Path) -> Frame:
-        frame = Frame(scene_id=scene.id, prompt=prompt, provider=provider.name, model=provider.model)
+    def _generate_portraits(
+        self, analysis: BookAnalysis, provider, out_dir: Path, force: bool, needed: set[str]
+    ) -> dict[str, Path]:
+        """Render one reference portrait per described character that appears."""
+        portraits_dir = out_dir / "portraits"
+        portraits_dir.mkdir(parents=True, exist_ok=True)
+
+        def appears(char) -> bool:
+            names = {char.name.lower(), *(a.lower() for a in char.aliases)}
+            return bool(names & needed)
+
+        characters = [c for c in analysis.characters if c.description and appears(c)]
+        if not characters:
+            return {}
+        self._progress(f"Rendering {len(characters)} character portrait(s)")
+
+        out: dict[str, Path] = {}
+        for char in characters:
+            prompt = build_portrait_prompt(char, self.config.project.style)
+            path = portraits_dir / f"{_slug(char.name)}.png"
+            key = cache.compute_key(
+                {"prompt": prompt, "provider": provider.name, "model": provider.model}
+            )
+            try:
+                if self.config.generation.cache and not force and cache.is_cached(path, key):
+                    pass  # reuse the existing portrait
+                else:
+                    provider.generate(prompt, path)
+                    cache.write_sidecar(path, key, {"character": char.name})
+                # Map canonical name and aliases to the portrait.
+                out[char.name.lower()] = path
+                for alias in char.aliases:
+                    out[alias.lower()] = path
+            except Exception as exc:  # noqa: BLE001 - a missing portrait isn't fatal
+                self._progress(f"  (portrait failed for {char.name}: {exc})")
+        return out
+
+    def _render_one(
+        self, provider, scene, prompt: str, refs: list[Path], frames_dir: Path, force: bool
+    ) -> Frame:
+        frame = Frame(
+            scene_id=scene.id,
+            prompt=prompt,
+            provider=provider.name,
+            model=provider.model,
+            references=[str(r) for r in refs],
+        )
+        out_path = (frames_dir / scene.id).with_suffix(".png")
+        key = cache.compute_key(
+            {
+                "prompt": prompt,
+                "provider": provider.name,
+                "model": provider.model,
+                "size": self.config.generation.size,
+                "refs": cache.reference_digests(refs),
+            }
+        )
         try:
-            path = provider.generate(prompt, frames_dir / scene.id)
+            if self.config.generation.cache and not force and cache.is_cached(out_path, key):
+                frame.image_path = str(out_path)
+                frame.cached = True
+                return frame
+            path = provider.generate(prompt, frames_dir / scene.id, references=refs)
             frame.image_path = str(path)
+            cache.write_sidecar(path, key, {"prompt": prompt})
         except Exception as exc:  # noqa: BLE001 - one frame failing shouldn't abort
             frame.error = str(exc)
         return frame
@@ -189,6 +299,7 @@ class Pipeline:
         audio_path: Optional[str] = None,
         analyze_only: bool = False,
         dry_run: bool = False,
+        force: bool = False,
     ) -> BookAnalysis:
         out_dir = Path(self.config.output.dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -220,7 +331,7 @@ class Pipeline:
         if analyze_only:
             return analysis
 
-        frames = self.generate(analysis, out_dir, dry_run=dry_run)
+        frames = self.generate(analysis, out_dir, dry_run=dry_run, force=force)
 
         manifest_path = out_dir / "manifest.json"
         manifest_path.write_text(

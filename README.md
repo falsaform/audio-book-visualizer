@@ -4,10 +4,12 @@ Turn an **audiobook** and/or **ebook** into AI-analyzed scenes and AI-generated
 **still frames** — a visual storyboard of the book.
 
 The pipeline reads the source, uses **Claude** to build a character bible and
-identify the most visually compelling moments, then uses **OpenAI DALL·E** to
-render each moment as an image. Characters look consistent across frames because
-each character's canonical appearance is injected into every prompt they appear
-in. Output is a folder of frames plus a browsable HTML gallery.
+identify the most visually compelling moments, then renders each moment as an
+image with a pluggable provider — **OpenAI DALL·E** or **Google Gemini 2.5 Flash
+Image** ("Nano Banana"). Characters stay consistent across frames: their
+canonical appearance is injected into every prompt, and with Gemini a generated
+character **portrait** is also passed as a reference image. Output is a folder of
+frames plus a browsable HTML gallery.
 
 ```
  ingest                 analyze (Claude)              generate (DALL·E)
@@ -47,7 +49,9 @@ needs an OpenAI key:
   `CLAUDE_CODE_OAUTH_TOKEN` (generate it with `claude setup-token`); analysis is
   routed through the bundled `claude` CLI, no API key required. If both are set,
   the API key wins. Override the choice with `analysis.provider` in `config.yaml`.
-- `OPENAI_API_KEY` — for DALL·E frame generation (and optional OpenAI transcription).
+- `OPENAI_API_KEY` (for DALL·E) **or** `GEMINI_API_KEY` (for Gemini / Nano Banana)
+  — match it to `generation.provider`. `OPENAI_API_KEY` is also used for optional
+  OpenAI audio transcription.
 
 `just` on its own lists every recipe:
 
@@ -150,12 +154,44 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 | `--ebook / -e` | Path to `.pdf` / `.epub` / `.txt`. |
 | `--audio / -a` | Path to audiobook (`.mp3` / `.m4a` / `.m4b` / `.wav`). |
 | `--analyze-only` | Stop after analysis; write `analysis.json`, skip images. |
-| `--dry-run` | Use the offline stub image provider (no DALL·E calls). |
+| `--dry-run` | Use the offline stub image provider (no DALL·E/Gemini calls). |
+| `--provider / -p` | Image provider: `openai` / `gemini` / `stub`. |
+| `--force` | Regenerate all frames, ignoring the cache. |
 | `--chapter-mode` | Audiobook-only chapter detection: `auto`/`markers`/`headings`/`time`/`single`. |
 | `--style / -s` | Override the visual style applied to every frame. |
 | `--max-frames / -n` | Cap how many frames are generated. |
 | `--out / -o` | Output directory. |
 | `--config / -c` | Path to a `config.yaml`. |
+
+## Image providers & consistency
+
+Pick a backend with `generation.provider` (or `--provider`):
+
+| Provider | Model | Reference images | Notes |
+|----------|-------|------------------|-------|
+| `openai` | `dall-e-3` (default) | ✗ | Consistency via text descriptions only. |
+| `gemini` | `gemini-2.5-flash-image` ("Nano Banana") | ✓ | Strongest character consistency. |
+| `stub`   | — | ✓ | Offline placeholder cards (`--dry-run`). |
+
+**Character portraits.** When the provider supports reference images (Gemini),
+the pipeline first renders one **reference portrait per character** that appears,
+then passes the relevant portraits alongside each scene prompt — so the same
+face/outfit recurs across frames. Portraits land in `output/portraits/` and are
+cached. Toggle with `generation.character_portraits`.
+
+**Caching.** Each frame and portrait gets a sidecar recording a hash of its
+inputs (prompt + provider + model + size + reference digests). Re-running only
+regenerates images whose inputs changed; change the style and just those frames
+rebuild. `--force` (or `generation.cache: false`) regenerates everything.
+
+**Shot variety.** The analyzer tags each moment with a shot type (wide
+establishing / medium / close-up), folded into the prompt for visual rhythm.
+Toggle with `generation.shot_variety`.
+
+```bash
+just visualize --audio book.m4b --provider gemini   # Nano Banana, with portraits
+just visualize --ebook book.epub --force            # rebuild every frame
+```
 
 ## Configuration
 
@@ -165,7 +201,9 @@ Everything has sane defaults. To tune, copy `config.example.yaml` to
 - `project.style` — the single biggest lever on how frames look.
 - `analysis.model` — which Claude model analyzes the text.
 - `audio.backend` — `faster-whisper` (local, default) or `openai` (hosted API).
-- `generation.model` / `size` / `quality` — DALL·E settings.
+- `generation.provider` — `openai` / `gemini` / `stub` (see above).
+- `generation.model` / `size` / `quality` — provider settings.
+- `generation.cache` / `character_portraits` / `shot_variety` — consistency & cost.
 - `generation.max_frames` / `concurrency` — cost and speed controls.
 
 ## Outputs
@@ -174,8 +212,9 @@ A run writes to `output/` (configurable):
 
 - `analysis.json` — characters + scenes (the structured analysis).
 - `audiobook_structure.json` — chapters + paragraphs with audio timestamps (audiobook-only mode).
-- `frames/*.png` — one image per scene.
-- `manifest.json` — each frame's prompt, provider and resulting file.
+- `frames/*.png` (+ `*.json` cache sidecars) — one image per scene.
+- `portraits/*.png` — per-character reference portraits (reference-capable providers).
+- `manifest.json` — each frame's prompt, provider, references and resulting file.
 - `gallery.html` — a self-contained gallery to browse the frames.
 
 ## How it works
@@ -189,28 +228,35 @@ A run writes to `output/` (configurable):
    each with a setting, mood, characters present and a rich visual description.
 3. **Align** (`analysis/align.py`) — fuzzy-match each scene's quoted excerpt to
    the transcript to attach audio timestamps (best-effort).
-4. **Generate** (`generation/`) — build a prompt per scene, splicing in the
-   canonical appearance of every character present (for consistency), and render
-   it with the configured image provider.
+4. **Generate** (`generation/`) — render a reference portrait per character, then
+   build a prompt per scene (shot type + canonical character appearances) and
+   render it with the configured provider, passing portraits as references where
+   supported. Content-addressed caching skips unchanged images.
 5. **Gallery** (`gallery.py`) — assemble frames + metadata into HTML.
 
 ## Extending
 
-- **New image backend** (Replicate, local Stable Diffusion, Gemini): implement
-  `ImageProvider.generate` in `generation/`, register it in
-  `generation/factory.py`. Nothing else changes.
+- **New image backend** (Replicate, local Stable Diffusion, ...): implement
+  `ImageProvider.generate` in `generation/`, set `supports_references` if it can
+  take reference images, and register it in `generation/factory.py`. Nothing
+  else changes — see `gemini_provider.py` for a reference-capable example.
 - **Better prompts**: edit `analysis/prompts.py` (analysis) and
   `generation/prompt_builder.py` (image prompt assembly).
 
 ## Roadmap
 
-Deliberately simple in this MVP, good next steps:
+Done:
+
+- ✅ Google Gemini 2.5 Flash Image ("Nano Banana") provider.
+- ✅ Reference-image / character-portrait conditioning for stronger consistency.
+- ✅ Shot-type variety (wide/medium/close-up).
+- ✅ Caching so re-runs only regenerate changed scenes.
+
+Still ahead:
 
 - True forced alignment (e.g. WhisperX) instead of fuzzy excerpt matching.
-- Reference-image / character-portrait conditioning for stronger consistency.
-- Per-chapter pacing controls and shot-type variety (wide/close-up).
 - A small web UI for browsing/regenerating individual frames.
-- Caching so re-runs only regenerate changed scenes.
+- Per-chapter pacing controls (frame density per chapter).
 
 ## Testing
 

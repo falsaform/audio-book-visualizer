@@ -50,12 +50,20 @@ class AudioConfig(BaseModel):
 
 
 class GenerationConfig(BaseModel):
-    provider: str = "openai"
+    provider: str = "openai"  # openai | gemini | stub
     model: str = "dall-e-3"
     size: str = "1792x1024"
     quality: str = "standard"
     max_frames: int = 0
     concurrency: int = 3
+    # Reuse unchanged frames across runs (skip the API call when inputs match).
+    cache: bool = True
+    # Generate a reference portrait per character and feed it to the image model
+    # for cross-frame consistency. Only effective for providers that support
+    # reference images (e.g. gemini); ignored otherwise.
+    character_portraits: bool = True
+    # Include the analyzer's per-scene shot type (wide/medium/close-up) in prompts.
+    shot_variety: bool = True
 
 
 class OutputConfig(BaseModel):

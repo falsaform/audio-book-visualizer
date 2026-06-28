@@ -23,9 +23,16 @@ def get_provider(config: GenerationConfig, dry_run: bool = False) -> ImageProvid
         return OpenAIImageProvider(
             model=config.model, size=config.size, quality=config.quality
         )
+    if provider in ("gemini", "nano-banana", "nanobanana"):
+        from .gemini_provider import GeminiImageProvider
+
+        # The shared `model` default is a DALL-E id; pick a Gemini model unless
+        # the user explicitly set a gemini-* model.
+        model = config.model if "gemini" in config.model.lower() else ""
+        return GeminiImageProvider(model=model)
     if provider == "stub":
         return StubImageProvider(size=config.size)
     raise ValueError(
         f"Unknown image provider {config.provider!r}. "
-        "Supported: 'openai', 'stub' (or use --dry-run)."
+        "Supported: 'openai', 'gemini', 'stub' (or use --dry-run)."
     )

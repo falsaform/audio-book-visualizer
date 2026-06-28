@@ -50,6 +50,9 @@ def visualize(
     max_frames: Optional[int] = typer.Option(
         None, "--max-frames", "-n", help="Cap the number of frames generated."
     ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", "-p", help="Image provider: openai | gemini | stub."
+    ),
     chapter_mode: Optional[str] = typer.Option(
         None,
         "--chapter-mode",
@@ -60,6 +63,9 @@ def visualize(
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Use the offline stub image provider (no API calls)."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Regenerate all frames, ignoring the cache."
     ),
 ):
     """Run the full pipeline: ingest -> analyze -> generate frames -> gallery."""
@@ -73,6 +79,8 @@ def visualize(
         config.project.style = style
     if max_frames is not None:
         config.generation.max_frames = max_frames
+    if provider is not None:
+        config.generation.provider = provider
     if chapter_mode is not None:
         config.audio.chapter_mode = chapter_mode
 
@@ -87,6 +95,7 @@ def visualize(
             audio_path=str(audio) if audio else None,
             analyze_only=analyze_only,
             dry_run=dry_run,
+            force=force,
         )
     except Exception as exc:  # noqa: BLE001 - surface a clean message to the user
         console.print(f"[red]Pipeline failed:[/red] {exc}")

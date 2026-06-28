@@ -8,15 +8,30 @@ says exactly what Ahab looks like — every single time he appears.
 
 from __future__ import annotations
 
-from ..models import BookAnalysis, Scene
+from ..models import BookAnalysis, Character, Scene
 
 # DALL-E and similar models reliably refuse to render legible text; we ask for
 # none to avoid garbled captions in frames.
 _NEGATIVE = "No text, no words, no captions, no watermark, no signature."
 
 
-def build_prompt(scene: Scene, analysis: BookAnalysis, style: str) -> str:
+def build_prompt(
+    scene: Scene,
+    analysis: BookAnalysis,
+    style: str,
+    include_shot: bool = True,
+    with_references: bool = False,
+) -> str:
+    """Compose the image prompt for a scene.
+
+    ``with_references`` signals that the provider will also receive character
+    portrait images, so the prompt nudges it to keep the referenced characters
+    consistent (the textual descriptions are still included as a fallback).
+    """
     parts: list[str] = []
+
+    if scene.shot_type and include_shot:
+        parts.append(f"{scene.shot_type}.")
 
     if scene.visual_description:
         parts.append(scene.visual_description)
@@ -31,6 +46,10 @@ def build_prompt(scene: Scene, analysis: BookAnalysis, style: str) -> str:
             appearances.append(f"{char.name}: {char.description}")
     if appearances:
         parts.append("Character appearances — " + " ".join(appearances))
+    if with_references and appearances:
+        parts.append(
+            "Keep the characters consistent with the provided reference portraits."
+        )
 
     # Scene framing hints.
     framing = []
@@ -46,5 +65,19 @@ def build_prompt(scene: Scene, analysis: BookAnalysis, style: str) -> str:
     if style:
         parts.append(f"Style: {style}.")
 
+    parts.append(_NEGATIVE)
+    return " ".join(p.strip() for p in parts if p.strip())
+
+
+def build_portrait_prompt(character: Character, style: str) -> str:
+    """A reference-portrait prompt for one character (used for consistency)."""
+    parts = [
+        f"Character reference portrait of {character.name}.",
+        character.description,
+        "Head-and-shoulders, facing forward, plain neutral studio background,"
+        " even lighting, consistent character design sheet.",
+    ]
+    if style:
+        parts.append(f"Style: {style}.")
     parts.append(_NEGATIVE)
     return " ".join(p.strip() for p in parts if p.strip())

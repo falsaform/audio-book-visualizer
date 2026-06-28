@@ -148,6 +148,7 @@ class Analyzer:
                         setting=str(item.get("setting", "")).strip(),
                         time_of_day=str(item.get("time_of_day", "")).strip(),
                         mood=str(item.get("mood", "")).strip(),
+                        shot_type=str(item.get("shot_type", "")).strip(),
                         characters_present=[
                             str(c).strip()
                             for c in item.get("characters_present", [])

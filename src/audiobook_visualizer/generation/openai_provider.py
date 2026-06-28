@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from typing import Optional, Sequence
 
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -14,6 +15,9 @@ from .base import ImageProvider
 
 class OpenAIImageProvider(ImageProvider):
     name = "openai"
+    # DALL-E 3 generation has no reference-image input; consistency relies on the
+    # character descriptions spliced into the text prompt.
+    supports_references = False
 
     def __init__(
         self,
@@ -29,7 +33,13 @@ class OpenAIImageProvider(ImageProvider):
         self._client = OpenAI(api_key=require_env("OPENAI_API_KEY"))
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, max=30))
-    def generate(self, prompt: str, out_path: Path) -> Path:
+    def generate(
+        self,
+        prompt: str,
+        out_path: Path,
+        references: Optional[Sequence[Path]] = None,
+    ) -> Path:
+        # references are ignored: DALL-E 3 generate() takes no image input.
         out_path = out_path.with_suffix(".png")
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
