@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+import os
+
 from ..config import GenerationConfig
 from .base import ImageProvider
 from .stub_provider import StubImageProvider
+
+
+def _has_key(name: str) -> bool:
+    """True for a real credential (ignores empty/placeholder '...' values)."""
+    value = os.environ.get(name, "")
+    return bool(value.strip()) and "..." not in value
+
+
+def _resolve_provider(provider: str, model: str) -> str:
+    """Resolve ``auto`` to a concrete provider based on available credentials."""
+    provider = (provider or "auto").lower()
+    if provider != "auto":
+        return provider
+    # If the model is explicitly a Gemini model, prefer Gemini.
+    if "gemini" in (model or "").lower() and _has_key("GEMINI_API_KEY"):
+        return "gemini"
+    if _has_key("OPENAI_API_KEY"):
+        return "openai"
+    if _has_key("GEMINI_API_KEY"):
+        return "gemini"
+    raise RuntimeError(
+        "No image-generation credentials found. Set OPENAI_API_KEY (DALL-E) or "
+        "GEMINI_API_KEY (Gemini), or set generation.provider explicitly."
+    )
 
 
 def get_provider(config: GenerationConfig, dry_run: bool = False) -> ImageProvider:
@@ -16,7 +42,7 @@ def get_provider(config: GenerationConfig, dry_run: bool = False) -> ImageProvid
     if dry_run:
         return StubImageProvider(size=config.size)
 
-    provider = config.provider.lower()
+    provider = _resolve_provider(config.provider, config.model)
     if provider == "openai":
         from .openai_provider import OpenAIImageProvider
 
@@ -34,5 +60,5 @@ def get_provider(config: GenerationConfig, dry_run: bool = False) -> ImageProvid
         return StubImageProvider(size=config.size)
     raise ValueError(
         f"Unknown image provider {config.provider!r}. "
-        "Supported: 'openai', 'gemini', 'stub' (or use --dry-run)."
+        "Supported: 'auto', 'openai', 'gemini', 'stub' (or use --dry-run)."
     )

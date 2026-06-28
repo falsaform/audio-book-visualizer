@@ -4,6 +4,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 from audiobook_visualizer.config import Config
 from audiobook_visualizer.generation import build_prompt
 from audiobook_visualizer.generation.cache import compute_key, is_cached, write_sidecar
@@ -143,6 +145,37 @@ def test_gemini_provider_writes_image(monkeypatch, tmp_path: Path):
     out = provider.generate("a stormy sea", tmp_path / "frame")
     assert out.exists()
     assert out.read_bytes() == image_bytes
+
+
+def test_resolve_provider_auto_picks_from_keys(monkeypatch):
+    from audiobook_visualizer.generation.factory import _resolve_provider
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    # Only Gemini key -> gemini.
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    assert _resolve_provider("auto", "dall-e-3") == "gemini"
+
+    # Both keys -> prefer openai (the documented default).
+    monkeypatch.setenv("OPENAI_API_KEY", "o-key")
+    assert _resolve_provider("auto", "dall-e-3") == "openai"
+
+    # Placeholder OPENAI key is ignored -> falls through to gemini.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-...")
+    assert _resolve_provider("auto", "dall-e-3") == "gemini"
+
+    # Explicit provider is respected.
+    assert _resolve_provider("openai", "dall-e-3") == "openai"
+
+
+def test_resolve_provider_auto_no_keys_errors(monkeypatch):
+    from audiobook_visualizer.generation.factory import _resolve_provider
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="No image-generation credentials"):
+        _resolve_provider("auto", "dall-e-3")
 
 
 def test_factory_selects_gemini(monkeypatch):

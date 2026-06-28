@@ -49,9 +49,10 @@ needs an OpenAI key:
   `CLAUDE_CODE_OAUTH_TOKEN` (generate it with `claude setup-token`); analysis is
   routed through the bundled `claude` CLI, no API key required. If both are set,
   the API key wins. Override the choice with `analysis.provider` in `config.yaml`.
-- `OPENAI_API_KEY` (for DALL·E) **or** `GEMINI_API_KEY` (for Gemini / Nano Banana)
-  — match it to `generation.provider`. `OPENAI_API_KEY` is also used for optional
-  OpenAI audio transcription.
+- `OPENAI_API_KEY` (for DALL·E) **or** `GEMINI_API_KEY` (for Gemini / Nano Banana).
+  With `generation.provider: auto` (the default) the backend is chosen from
+  whichever key is set, so just provide one. `OPENAI_API_KEY` is also used for
+  optional OpenAI audio transcription.
 
 `just` on its own lists every recipe:
 
@@ -216,11 +217,14 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 
 ## Image providers & consistency
 
-Pick a backend with `generation.provider` (or `--provider`):
+`generation.provider` defaults to `auto` — it picks `openai` if `OPENAI_API_KEY`
+is set, else `gemini` if `GEMINI_API_KEY` is set. Force one with
+`generation.provider` or `--provider`:
 
 | Provider | Model | Reference images | Notes |
 |----------|-------|------------------|-------|
-| `openai` | `dall-e-3` (default) | ✗ | Consistency via text descriptions only. |
+| `auto`   | — | — | Pick from available keys (default). |
+| `openai` | `dall-e-3` | ✗ | Consistency via text descriptions only. |
 | `gemini` | `gemini-2.5-flash-image` ("Nano Banana") | ✓ | Strongest character consistency. |
 | `stub`   | — | ✓ | Offline placeholder cards (`--dry-run`). |
 

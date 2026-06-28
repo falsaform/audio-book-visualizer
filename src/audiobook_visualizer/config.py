@@ -50,7 +50,9 @@ class AudioConfig(BaseModel):
 
 
 class GenerationConfig(BaseModel):
-    provider: str = "openai"  # openai | gemini | stub
+    # auto: pick from available keys (OPENAI_API_KEY -> openai, else
+    # GEMINI_API_KEY -> gemini). Force with "openai" | "gemini" | "stub".
+    provider: str = "auto"
     model: str = "dall-e-3"
     size: str = "1792x1024"
     quality: str = "standard"
