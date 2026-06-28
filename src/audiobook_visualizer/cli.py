@@ -38,6 +38,11 @@ def visualize(
     audio: Optional[Path] = typer.Option(
         None, "--audio", "-a", help="Path to audiobook (.mp3/.m4a/.m4b/.wav)."
     ),
+    structure: Optional[Path] = typer.Option(
+        None,
+        "--structure",
+        help="Reuse an existing audiobook_structure.json (skip transcription).",
+    ),
     config_path: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config.yaml (defaults to ./config.yaml)."
     ),
@@ -84,8 +89,8 @@ def visualize(
     if chapter_mode is not None:
         config.audio.chapter_mode = chapter_mode
 
-    if not ebook and not audio:
-        console.print("[red]Error:[/red] provide --ebook and/or --audio.")
+    if not ebook and not audio and not structure:
+        console.print("[red]Error:[/red] provide --ebook, --audio, and/or --structure.")
         raise typer.Exit(code=2)
 
     pipeline = Pipeline(config, on_progress=_progress)
@@ -93,6 +98,7 @@ def visualize(
         analysis = pipeline.run(
             ebook_path=str(ebook) if ebook else None,
             audio_path=str(audio) if audio else None,
+            structure_path=str(structure) if structure else None,
             analyze_only=analyze_only,
             dry_run=dry_run,
             force=force,

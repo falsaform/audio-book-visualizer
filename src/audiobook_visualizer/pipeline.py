@@ -67,7 +67,10 @@ class Pipeline:
     # -- stages -------------------------------------------------------------
 
     def ingest(
-        self, ebook_path: Optional[str], audio_path: Optional[str]
+        self,
+        ebook_path: Optional[str],
+        audio_path: Optional[str],
+        structure_path: Optional[str] = None,
     ) -> IngestResult:
         result = IngestResult()
 
@@ -80,7 +83,21 @@ class Pipeline:
                 f"  {len(result.chapters)} chapter(s), {len(book.full_text):,} chars"
             )
 
-        if audio_path and self.config.audio.enabled:
+        if structure_path:
+            # Reuse a previously segmented audiobook — skip (re)transcription.
+            self._progress(f"Loading audiobook structure: {structure_path}")
+            result.structure = AudiobookStructure.model_validate_json(
+                Path(structure_path).read_text()
+            )
+            if not result.chapters:
+                result.chapters = result.structure.as_chapters
+                result.title = result.title or result.structure.title
+            n_para = sum(len(c.paragraphs) for c in result.structure.chapters)
+            self._progress(
+                f"  {len(result.structure.chapters)} chapter(s), {n_para} paragraph(s) "
+                f"(loaded, via {result.structure.source})"
+            )
+        elif audio_path and self.config.audio.enabled:
             self._progress(
                 f"Transcribing audio ({self.config.audio.backend}): {audio_path}"
             )
@@ -339,6 +356,7 @@ class Pipeline:
         self,
         ebook_path: Optional[str] = None,
         audio_path: Optional[str] = None,
+        structure_path: Optional[str] = None,
         analyze_only: bool = False,
         dry_run: bool = False,
         force: bool = False,
@@ -346,16 +364,16 @@ class Pipeline:
         out_dir = Path(self.config.output.dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        ingested = self.ingest(ebook_path, audio_path)
+        ingested = self.ingest(ebook_path, audio_path, structure_path)
 
         # Persist the audiobook segmentation so each chapter/paragraph (with its
         # timestamps) can be inspected or processed individually.
         if ingested.structure is not None:
-            structure_path = out_dir / "audiobook_structure.json"
-            structure_path.write_text(
+            structure_out = out_dir / "audiobook_structure.json"
+            structure_out.write_text(
                 ingested.structure.model_dump_json(indent=2), encoding="utf-8"
             )
-            self._progress(f"Wrote audiobook structure -> {structure_path}")
+            self._progress(f"Wrote audiobook structure -> {structure_out}")
 
         analysis = self.analyze(
             ingested.chapters,

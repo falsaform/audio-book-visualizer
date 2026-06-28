@@ -135,6 +135,18 @@ for tiny inputs).
 start/end times. A full `visualize` run on an audiobook writes the same file
 alongside `analysis.json`.
 
+**Reuse the structure (skip re-transcribing).** Once you're happy with a
+`segment` result, feed it straight into the full pipeline — `visualize` will use
+it for analysis and frame generation instead of transcribing the audio again:
+
+```bash
+just visualize --structure output/audiobook_structure.json
+```
+
+This is the fast path for long books (transcribe once, then iterate on analysis
+and frames), and it pairs with the preview window: segment a 10-minute slice,
+then `visualize --structure` it for a quick end-to-end preview.
+
 ### Claude Code in the container
 
 The image ships the [Claude Code](https://claude.com/claude-code) CLI. Authenticate
@@ -164,6 +176,7 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 |------|---------|
 | `--ebook / -e` | Path to `.pdf` / `.epub` / `.txt`. |
 | `--audio / -a` | Path to audiobook (`.mp3` / `.m4a` / `.m4b` / `.wav`). |
+| `--structure` | Reuse an existing `audiobook_structure.json` (skip transcription). |
 | `--analyze-only` | Stop after analysis; write `analysis.json`, skip images. |
 | `--dry-run` | Use the offline stub image provider (no DALL·E/Gemini calls). |
 | `--provider / -p` | Image provider: `openai` / `gemini` / `stub`. |
