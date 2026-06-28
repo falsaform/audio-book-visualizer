@@ -34,6 +34,12 @@ class AudioConfig(BaseModel):
     backend: str = "faster-whisper"  # or "openai"
     model: str = "base"
     align_to_ebook: bool = True
+    # Audiobook-only segmentation (used when no ebook is supplied).
+    segment: bool = True
+    chapter_mode: str = "auto"  # auto | markers | headings | time | single
+    chapter_seconds: int = 900  # window length for the "time" fallback
+    paragraph_gap: float = 0.65  # pause (s) that can end a paragraph
+    paragraph_max_chars: int = 1500  # hard cap so paragraphs stay bounded
 
 
 class GenerationConfig(BaseModel):

@@ -56,6 +56,9 @@ All commands run in the container; pass CLI flags straight through `just`:
 # Full run: ebook + audiobook -> analyzed scenes -> generated frames -> gallery
 just visualize --ebook book.epub --audio book.m4b
 
+# Audiobook-only: no ebook needed — structure is recovered from the audio
+just visualize --audio book.m4b
+
 # Ebook only, just the analysis (characters + scenes), no images
 just visualize --ebook book.pdf --analyze-only
 
@@ -69,6 +72,32 @@ just abv characters output/analysis.json
 Put your input files in the project directory (it is bind-mounted into the
 container at `/app`) and reference them by relative path. Output lands in
 `./output/`; open `output/gallery.html` when it finishes.
+
+### Audiobook-only mode
+
+With no ebook, the pipeline recovers structure from the audio itself —
+transcribing it and segmenting into **chapters** and **paragraphs** so each
+piece can be processed (and timestamped) individually. Chapter boundaries are
+detected, in order of preference:
+
+1. **Embedded markers** — `.m4b` chapter tables, read via `ffprobe`.
+2. **Spoken headings** — the narrator saying "Chapter One", etc.
+3. **Time windows** — a fixed-length fallback (`chapter_seconds`).
+
+Paragraphs are split on the narration's natural pauses landing on sentence
+boundaries (`paragraph_gap`). Tune any of this under `audio:` in `config.yaml`
+or with `--chapter-mode auto|markers|headings|time|single`.
+
+You can run **just** the segmentation — transcription only, no API keys — to
+inspect or pre-process the structure:
+
+```bash
+just segment --audio book.m4b          # writes output/audiobook_structure.json
+```
+
+`audiobook_structure.json` contains every chapter and paragraph with its audio
+start/end times. A full `visualize` run on an audiobook writes the same file
+alongside `analysis.json`.
 
 ### Managing dependencies
 
@@ -84,6 +113,7 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 | `--audio / -a` | Path to audiobook (`.mp3` / `.m4a` / `.m4b` / `.wav`). |
 | `--analyze-only` | Stop after analysis; write `analysis.json`, skip images. |
 | `--dry-run` | Use the offline stub image provider (no DALL·E calls). |
+| `--chapter-mode` | Audiobook-only chapter detection: `auto`/`markers`/`headings`/`time`/`single`. |
 | `--style / -s` | Override the visual style applied to every frame. |
 | `--max-frames / -n` | Cap how many frames are generated. |
 | `--out / -o` | Output directory. |
@@ -105,6 +135,7 @@ Everything has sane defaults. To tune, copy `config.example.yaml` to
 A run writes to `output/` (configurable):
 
 - `analysis.json` — characters + scenes (the structured analysis).
+- `audiobook_structure.json` — chapters + paragraphs with audio timestamps (audiobook-only mode).
 - `frames/*.png` — one image per scene.
 - `manifest.json` — each frame's prompt, provider and resulting file.
 - `gallery.html` — a self-contained gallery to browse the frames.
@@ -112,7 +143,9 @@ A run writes to `output/` (configurable):
 ## How it works
 
 1. **Ingest** (`ingest/`) — extract chapter-aware text from PDF/EPUB/TXT;
-   optionally transcribe the audiobook to timestamped segments.
+   optionally transcribe the audiobook to timestamped segments. In audiobook-only
+   mode, `segmentation.py` recovers chapters (markers/headings/time) and
+   paragraphs (narration pauses) from the transcript.
 2. **Analyze** (`analysis/`) — chunk the text; ask Claude to (a) build a
    character bible of physical appearances and (b) pick key visual moments,
    each with a setting, mood, characters present and a rich visual description.

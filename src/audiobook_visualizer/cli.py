@@ -50,6 +50,11 @@ def visualize(
     max_frames: Optional[int] = typer.Option(
         None, "--max-frames", "-n", help="Cap the number of frames generated."
     ),
+    chapter_mode: Optional[str] = typer.Option(
+        None,
+        "--chapter-mode",
+        help="Audiobook-only chapter detection: auto|markers|headings|time|single.",
+    ),
     analyze_only: bool = typer.Option(
         False, "--analyze-only", help="Run analysis and stop before image generation."
     ),
@@ -68,6 +73,8 @@ def visualize(
         config.project.style = style
     if max_frames is not None:
         config.generation.max_frames = max_frames
+    if chapter_mode is not None:
+        config.audio.chapter_mode = chapter_mode
 
     if not ebook and not audio:
         console.print("[red]Error:[/red] provide --ebook and/or --audio.")
@@ -86,6 +93,73 @@ def visualize(
         raise typer.Exit(code=1)
 
     _summary(analysis, config.output.dir)
+
+
+@app.command()
+def segment(
+    audio: Path = typer.Option(..., "--audio", "-a", help="Path to the audiobook file."),
+    config_path: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config.yaml."
+    ),
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Output directory (overrides config)."
+    ),
+    chapter_mode: Optional[str] = typer.Option(
+        None, "--chapter-mode", help="auto|markers|headings|time|single."
+    ),
+):
+    """Transcribe an audiobook and segment it into chapters + paragraphs.
+
+    Audiobook-only and API-free: writes audiobook_structure.json with each
+    chapter and paragraph plus audio timestamps, so pieces can be processed
+    individually. No analysis or image generation.
+    """
+    from .ingest import build_audiobook_structure, transcribe_audio
+
+    load_env()
+    config = Config.load(config_path)
+    if out is not None:
+        config.output.dir = str(out)
+    if chapter_mode is not None:
+        config.audio.chapter_mode = chapter_mode
+
+    try:
+        _progress(f"Transcribing audio ({config.audio.backend}): {audio}")
+        transcript = transcribe_audio(
+            str(audio), backend=config.audio.backend, model=config.audio.model
+        )
+        _progress(f"  {len(transcript.segments)} transcript segment(s)")
+        _progress("Segmenting into chapters and paragraphs")
+        structure = build_audiobook_structure(
+            transcript, str(audio), config.audio, title=audio.stem
+        )
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Segmentation failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    out_dir = Path(config.output.dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    structure_path = out_dir / "audiobook_structure.json"
+    structure_path.write_text(structure.model_dump_json(indent=2), encoding="utf-8")
+
+    table = Table(title=f"Audiobook structure — {structure.title} (via {structure.source})")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Chapter", style="bold cyan")
+    table.add_column("Paras", justify="right")
+    table.add_column("Span")
+    for ch in structure.chapters:
+        span = f"{_fmt_time(ch.start)}–{_fmt_time(ch.end)}"
+        table.add_row(str(ch.index + 1), ch.title, str(len(ch.paragraphs)), span)
+    console.print(table)
+    console.print(f"  Wrote: [underline]{structure_path}[/underline]")
+
+
+def _fmt_time(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "?"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
 
 
 @app.command()

@@ -2,5 +2,11 @@
 
 from .ebook import load_ebook
 from .audio import transcribe_audio
+from .segmentation import build_audiobook_structure, extract_chapter_markers
 
-__all__ = ["load_ebook", "transcribe_audio"]
+__all__ = [
+    "load_ebook",
+    "transcribe_audio",
+    "build_audiobook_structure",
+    "extract_chapter_markers",
+]

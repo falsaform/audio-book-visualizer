@@ -46,6 +46,11 @@ abv *args:
 visualize *args:
     {{run}} abv visualize {{args}}
 
+# Audiobook-only: transcribe + segment into chapters/paragraphs (no API keys)
+# e.g. `just segment --audio book.m4b`
+segment *args:
+    {{run}} abv segment {{args}}
+
 # Offline demo on the bundled sample (stub frames, no image API; needs ANTHROPIC_API_KEY)
 demo:
     {{run}} abv visualize --ebook examples/sample.txt --dry-run --max-frames 4

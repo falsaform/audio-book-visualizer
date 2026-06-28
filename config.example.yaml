@@ -20,6 +20,12 @@ audio:
   backend: faster-whisper         # "faster-whisper" (local) or "openai"
   model: base                     # whisper model size (tiny/base/small/medium/large-v3)
   align_to_ebook: true            # attach audio timestamps to scenes when possible
+  # Audiobook-only mode: when no ebook is supplied, recover structure from audio.
+  segment: true                   # segment into chapters + paragraphs
+  chapter_mode: auto              # auto | markers | headings | time | single
+  chapter_seconds: 900            # window length (s) for the "time" fallback
+  paragraph_gap: 0.65             # narration pause (s) that can end a paragraph
+  paragraph_max_chars: 1500       # hard cap so paragraphs stay bounded
 
 generation:
   provider: openai

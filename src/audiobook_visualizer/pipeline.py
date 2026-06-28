@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -19,10 +20,19 @@ from .analysis.align import align_scenes
 from .config import Config
 from .gallery import render_gallery
 from .generation import build_prompt, get_provider
-from .ingest import load_ebook, transcribe_audio
-from .models import BookAnalysis, Frame, Transcript
+from .ingest import build_audiobook_structure, load_ebook, transcribe_audio
+from .models import AudiobookStructure, BookAnalysis, Frame, Transcript
 
 ProgressFn = Callable[[str], None]
+
+
+@dataclass
+class IngestResult:
+    chapters: list[tuple[str, str]] = field(default_factory=list)
+    title: str = ""
+    author: str = ""
+    transcript: Optional[Transcript] = None
+    structure: Optional[AudiobookStructure] = None
 
 
 class Pipeline:
@@ -34,34 +44,51 @@ class Pipeline:
 
     def ingest(
         self, ebook_path: Optional[str], audio_path: Optional[str]
-    ) -> tuple[list[tuple[str, str]], str, str, Optional[Transcript]]:
-        chapters: list[tuple[str, str]] = []
-        title = author = ""
-        transcript: Optional[Transcript] = None
+    ) -> IngestResult:
+        result = IngestResult()
 
         if ebook_path:
             self._progress(f"Loading ebook: {ebook_path}")
             book = load_ebook(ebook_path)
-            chapters = [(ch.title, ch.text) for ch in book.chapters]
-            title, author = book.title, book.author
-            self._progress(f"  {len(chapters)} chapter(s), {len(book.full_text):,} chars")
+            result.chapters = [(ch.title, ch.text) for ch in book.chapters]
+            result.title, result.author = book.title, book.author
+            self._progress(
+                f"  {len(result.chapters)} chapter(s), {len(book.full_text):,} chars"
+            )
 
         if audio_path and self.config.audio.enabled:
-            self._progress(f"Transcribing audio ({self.config.audio.backend}): {audio_path}")
-            transcript = transcribe_audio(
+            self._progress(
+                f"Transcribing audio ({self.config.audio.backend}): {audio_path}"
+            )
+            result.transcript = transcribe_audio(
                 audio_path,
                 backend=self.config.audio.backend,
                 model=self.config.audio.model,
             )
-            self._progress(f"  {len(transcript.segments)} transcript segment(s)")
-            # If we have no ebook, the transcript IS the text source.
-            if not chapters:
-                chapters = [("Audiobook transcript", transcript.full_text)]
-                title = title or Path(audio_path).stem
+            self._progress(f"  {len(result.transcript.segments)} transcript segment(s)")
 
-        if not chapters:
+            # Audiobook-only mode: the transcript is the text source. Recover
+            # chapter/paragraph structure from the audio instead of using one
+            # undifferentiated blob.
+            if not result.chapters:
+                result.title = result.title or Path(audio_path).stem
+                if self.config.audio.segment:
+                    self._progress("Segmenting audiobook into chapters and paragraphs")
+                    result.structure = build_audiobook_structure(
+                        result.transcript, audio_path, self.config.audio, title=result.title
+                    )
+                    result.chapters = result.structure.as_chapters
+                    n_para = sum(len(c.paragraphs) for c in result.structure.chapters)
+                    self._progress(
+                        f"  {len(result.chapters)} chapter(s), {n_para} paragraph(s) "
+                        f"(via {result.structure.source})"
+                    )
+                else:
+                    result.chapters = [("Audiobook transcript", result.transcript.full_text)]
+
+        if not result.chapters:
             raise ValueError("Nothing to analyze: provide an ebook and/or audiobook.")
-        return chapters, title, author, transcript
+        return result
 
     def analyze(
         self,
@@ -141,8 +168,20 @@ class Pipeline:
         out_dir = Path(self.config.output.dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        chapters, title, author, transcript = self.ingest(ebook_path, audio_path)
-        analysis = self.analyze(chapters, title, author, transcript)
+        ingested = self.ingest(ebook_path, audio_path)
+
+        # Persist the audiobook segmentation so each chapter/paragraph (with its
+        # timestamps) can be inspected or processed individually.
+        if ingested.structure is not None:
+            structure_path = out_dir / "audiobook_structure.json"
+            structure_path.write_text(
+                ingested.structure.model_dump_json(indent=2), encoding="utf-8"
+            )
+            self._progress(f"Wrote audiobook structure -> {structure_path}")
+
+        analysis = self.analyze(
+            ingested.chapters, ingested.title, ingested.author, ingested.transcript
+        )
 
         # Always persist the analysis so it can be inspected or reused.
         analysis_path = out_dir / "analysis.json"

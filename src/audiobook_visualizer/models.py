@@ -49,6 +49,48 @@ class Transcript(BaseModel):
         return " ".join(seg.text.strip() for seg in self.segments)
 
 
+class Paragraph(BaseModel):
+    """A paragraph of narration with its audio time span."""
+
+    index: int
+    text: str
+    start: Optional[float] = None
+    end: Optional[float] = None
+
+
+class AudioChapter(BaseModel):
+    """A chapter of an audiobook, segmented into paragraphs.
+
+    ``source`` (on the enclosing structure) records how the boundary was
+    derived: embedded chapter markers, spoken "Chapter N" headings in the
+    narration, or fixed-length time windows.
+    """
+
+    index: int
+    title: str
+    start: Optional[float] = None
+    end: Optional[float] = None
+    paragraphs: list[Paragraph] = Field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        # Joined on blank lines so the analyzer's chunker splits on paragraphs.
+        return "\n\n".join(p.text for p in self.paragraphs if p.text.strip())
+
+
+class AudiobookStructure(BaseModel):
+    """The chapter/paragraph segmentation of an audiobook."""
+
+    title: str = ""
+    source: str = ""  # "markers" | "headings" | "time" | "single"
+    chapters: list[AudioChapter] = Field(default_factory=list)
+
+    @property
+    def as_chapters(self) -> list[tuple[str, str]]:
+        """Shape the structure for the analyzer: ``(title, text)`` per chapter."""
+        return [(ch.title, ch.text) for ch in self.chapters]
+
+
 class Scene(BaseModel):
     """A single visual moment worth rendering as a still frame."""
 
