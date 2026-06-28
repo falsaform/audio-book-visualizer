@@ -63,7 +63,7 @@ def visualize(
         None, "--ebook", "-e", help="Path to .pdf/.epub/.txt ebook."
     ),
     audio: Optional[Path] = typer.Option(
-        None, "--audio", "-a", help="Path to audiobook (.mp3/.m4a/.m4b/.wav)."
+        None, "--audio", "-a", help="Audiobook file, or a folder of audio parts."
     ),
     structure: Optional[Path] = typer.Option(
         None,
@@ -179,7 +179,9 @@ def web(
 
 @app.command()
 def segment(
-    audio: Path = typer.Option(..., "--audio", "-a", help="Path to the audiobook file."),
+    audio: Path = typer.Option(
+        ..., "--audio", "-a", help="Audiobook file, or a folder of audio parts."
+    ),
     config_path: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config.yaml."
     ),
@@ -229,8 +231,12 @@ def segment(
         transcript = _transcribe_with_progress(audio, config, start_s, duration_s)
         _progress(f"  {len(transcript.segments)} transcript segment(s)")
         _progress("Segmenting into chapters and paragraphs")
+        from .ingest import audio_file_boundaries
+
+        boundaries = audio_file_boundaries(str(audio))
         structure = build_audiobook_structure(
-            transcript, str(audio), config.audio, title=audio.stem
+            transcript, str(audio), config.audio, title=audio.stem,
+            file_boundaries=boundaries,
         )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Segmentation failed:[/red] {exc}")

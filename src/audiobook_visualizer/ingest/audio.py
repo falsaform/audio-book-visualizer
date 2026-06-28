@@ -20,6 +20,7 @@ or the duration can't be probed, we fall back to a single whole-file pass.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -32,6 +33,56 @@ from ..models import Transcript, TranscriptSegment
 # Progress callback: (seconds_done, seconds_total). Total may be 0 if unknown.
 ProgressCb = Callable[[float, float], None]
 
+# Audio file extensions recognized when a directory of parts is given.
+AUDIO_EXTS = {
+    ".mp3", ".m4a", ".m4b", ".wav", ".flac", ".aac", ".ogg", ".oga", ".opus", ".wma",
+}
+
+# A "timeline" entry: one file placed on the global timeline.
+TimelineItem = tuple[Path, float, float]  # (file, start_offset, duration)
+
+
+def _natural_key(path: Path):
+    """Sort key so 'Part 2' precedes 'Part 10' (split-audiobook ordering)."""
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", path.name)]
+
+
+def gather_audio_files(path: str | Path) -> list[Path]:
+    """Resolve a file or a directory-of-parts to an ordered list of audio files."""
+    p = Path(path)
+    if p.is_dir():
+        files = [f for f in p.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
+        if not files:
+            raise FileNotFoundError(f"No audio files found in directory: {p}")
+        return sorted(files, key=_natural_key)
+    if not p.exists():
+        raise FileNotFoundError(p)
+    return [p]
+
+
+def _build_timeline(files: list[Path]) -> tuple[list[TimelineItem], float]:
+    """Lay files end to end on one timeline; return (items, total_duration)."""
+    timeline: list[TimelineItem] = []
+    cursor = 0.0
+    for f in files:
+        dur = _probe_duration(f)
+        timeline.append((f, cursor, dur))
+        cursor += dur
+    return timeline, cursor
+
+
+def audio_file_boundaries(path: str | Path) -> Optional[list[tuple[str, float, float]]]:
+    """Chapter boundaries from a multi-file audiobook (one chapter per file).
+
+    Returns ``(title, start, end)`` per file, or ``None`` for a single file (so
+    single files keep using marker/heading/time chapter detection).
+    """
+    files = gather_audio_files(path)
+    if len(files) < 2:
+        return None
+    timeline, _total = _build_timeline(files)
+    return [(f.stem, start, start + dur) for f, start, dur in timeline]
+
 
 def transcribe_audio(
     path: str | Path,
@@ -42,18 +93,24 @@ def transcribe_audio(
     start: float = 0.0,
     duration: Optional[float] = None,
 ) -> Transcript:
-    """Transcribe ``path`` (optionally only the window ``[start, start+duration]``).
+    """Transcribe ``path`` — a single file OR a directory of audio parts.
 
-    ``start``/``duration`` are in seconds; timestamps in the result stay absolute
-    (relative to the original file) so a preview's times match a full run. A
-    window requires ffmpeg/ffprobe.
+    Multiple files are placed end to end on one timeline, so timestamps are
+    continuous across parts. ``start``/``duration`` (seconds) optionally restrict
+    transcription to a window of that timeline; timestamps stay absolute so a
+    preview matches a full run. Windows and multi-file input require ffmpeg.
     """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-
+    files = gather_audio_files(path)
+    multi = len(files) > 1
     have_ffmpeg = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
-    total = _probe_duration(path)
+
+    if multi and not have_ffmpeg:
+        raise RuntimeError("Multi-file (folder) audio requires ffmpeg/ffprobe.")
+
+    if have_ffmpeg:
+        timeline, total = _build_timeline(files)
+    else:
+        timeline, total = [(files[0], 0.0, 0.0)], 0.0  # single-file, no probe
 
     w_start = max(0.0, float(start or 0.0))
     windowed = w_start > 0.0 or duration is not None
@@ -68,17 +125,14 @@ def transcribe_audio(
     if total:
         w_end = min(w_end, total) if w_end else total
 
-    # Chunking is required to extract a window; otherwise it's an optimization.
+    # Chunking is required to window or to walk multiple files; else optional.
     can_chunk = bool(chunk_seconds and total and have_ffmpeg)
-    if windowed:
-        chunk = chunk_seconds or 600
-    else:
-        chunk = chunk_seconds if can_chunk else 0
+    chunk = (chunk_seconds or 600) if (windowed or multi) else (chunk_seconds if can_chunk else 0)
 
     if backend == "faster-whisper":
-        return _transcribe_local(path, model, on_progress, w_start, w_end, chunk)
+        return _transcribe_local(timeline, model, on_progress, w_start, w_end, chunk)
     if backend == "openai":
-        return _transcribe_openai(path, on_progress, w_start, w_end, chunk)
+        return _transcribe_openai(timeline, on_progress, w_start, w_end, chunk)
     raise ValueError(f"Unknown audio backend: {backend!r}")
 
 
@@ -86,7 +140,7 @@ def transcribe_audio(
 
 
 def _transcribe_local(
-    path: Path,
+    timeline: list[TimelineItem],
     model: str,
     on_progress: Optional[ProgressCb],
     w_start: float,
@@ -124,14 +178,14 @@ def _transcribe_local(
                 done = (seg.end + offset - w_start) if window_len else seg.end + offset
                 on_progress(min(done, span), span)
 
-    _drive(path, w_start, w_end, chunk_seconds, transcribe_part)
+    _drive(timeline, w_start, w_end, chunk_seconds, transcribe_part)
     if on_progress and window_len:
         on_progress(window_len, window_len)
     return Transcript(language=language, segments=segments)
 
 
 def _transcribe_openai(
-    path: Path,
+    timeline: list[TimelineItem],
     on_progress: Optional[ProgressCb],
     w_start: float,
     w_end: float,
@@ -163,7 +217,7 @@ def _transcribe_openai(
             done = min(offset - w_start + (chunk_seconds or window_len), window_len)
             on_progress(done, window_len)
 
-    _drive(path, w_start, w_end, chunk_seconds, transcribe_part)
+    _drive(timeline, w_start, w_end, chunk_seconds, transcribe_part)
     if on_progress and window_len:
         on_progress(window_len, window_len)
     return Transcript(segments=segments)
@@ -173,19 +227,32 @@ def _transcribe_openai(
 
 
 def _drive(
-    path: Path,
+    timeline: list[TimelineItem],
     w_start: float,
     w_end: float,
     chunk_seconds: int,
     handle: Callable[[Path, float], None],
 ) -> None:
-    """Feed ``handle(part_path, offset)`` per-chunk over the window, or whole-file."""
+    """Feed ``handle(part_path, global_offset)`` per-chunk across the timeline.
+
+    Each file contributes the portion that overlaps ``[w_start, w_end)``; chunk
+    offsets are translated to the global timeline so timestamps stay continuous.
+    """
     if not chunk_seconds:
-        handle(path, 0.0)
+        handle(timeline[0][0], 0.0)  # single-file, no-ffmpeg fallback
         return
     with tempfile.TemporaryDirectory(prefix="abv-audio-") as workdir:
-        for part, offset in _iter_chunks(path, w_start, w_end, chunk_seconds, Path(workdir)):
-            handle(part, offset)
+        wd = Path(workdir)
+        for file, file_off, dur in timeline:
+            file_end = file_off + dur
+            seg_start = max(w_start, file_off)
+            seg_end = min(w_end, file_end) if w_end else file_end
+            if seg_end <= seg_start:
+                continue  # this file is outside the window
+            within_start = seg_start - file_off
+            within_end = seg_end - file_off
+            for part, within in _iter_chunks(file, within_start, within_end, chunk_seconds, wd):
+                handle(part, file_off + within)
 
 
 def _iter_chunks(

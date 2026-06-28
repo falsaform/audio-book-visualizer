@@ -28,7 +28,8 @@ audio:
                                   # 0 disables (loads whole file — tiny inputs only)
   # Audiobook-only mode: when no ebook is supplied, recover structure from audio.
   segment: true                   # segment into chapters + paragraphs
-  chapter_mode: auto              # auto | markers | headings | time | single
+  chapter_mode: auto              # auto | files | markers | headings | time | single
+                                  # ("files" = one chapter per file for folder input)
   chapter_seconds: 900            # window length (s) for the "time" fallback
   paragraph_gap: 0.65             # narration pause (s) that can end a paragraph
   paragraph_max_chars: 1500       # hard cap so paragraphs stay bounded

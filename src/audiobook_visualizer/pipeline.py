@@ -20,7 +20,12 @@ from .analysis.align import align_scenes, align_scenes_to_structure
 from .config import Config
 from .gallery import render_gallery
 from .generation import build_portrait_prompt, build_prompt, cache, get_provider
-from .ingest import build_audiobook_structure, load_ebook, transcribe_audio
+from .ingest import (
+    audio_file_boundaries,
+    build_audiobook_structure,
+    load_ebook,
+    transcribe_audio,
+)
 from .models import AudiobookStructure, BookAnalysis, Frame, Scene, Transcript
 
 ProgressFn = Callable[[str], None]
@@ -117,8 +122,11 @@ class Pipeline:
                 result.title = result.title or Path(audio_path).stem
                 if self.config.audio.segment:
                     self._progress("Segmenting audiobook into chapters and paragraphs")
+                    # A folder of parts -> one chapter per file.
+                    boundaries = audio_file_boundaries(audio_path)
                     result.structure = build_audiobook_structure(
-                        result.transcript, audio_path, self.config.audio, title=result.title
+                        result.transcript, audio_path, self.config.audio,
+                        title=result.title, file_boundaries=boundaries,
                     )
                     result.chapters = result.structure.as_chapters
                     n_para = sum(len(c.paragraphs) for c in result.structure.chapters)

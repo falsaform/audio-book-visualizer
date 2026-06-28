@@ -79,14 +79,24 @@ def build_audiobook_structure(
     audio_path: str | Path,
     config: AudioConfig,
     title: str = "",
+    file_boundaries: Optional[list[tuple[str, float, float]]] = None,
 ) -> AudiobookStructure:
-    """Segment ``transcript`` into chapters and paragraphs per ``config``."""
+    """Segment ``transcript`` into chapters and paragraphs per ``config``.
+
+    ``file_boundaries`` (one ``(title, start, end)`` per part) is passed for a
+    multi-file audiobook; each file becomes a chapter — a strong, reliable signal
+    that takes precedence over marker/heading/time detection.
+    """
     mode = (config.chapter_mode or "auto").lower()
 
     chapters: Optional[list[AudioChapter]] = None
     source = "single"
 
-    if mode in ("auto", "markers"):
+    if file_boundaries and mode in ("auto", "files", "markers"):
+        chapters = _chapters_from_markers(transcript, file_boundaries, config)
+        source = "files"
+
+    if chapters is None and mode in ("auto", "markers"):
         markers = extract_chapter_markers(audio_path)
         if markers:
             chapters = _chapters_from_markers(transcript, markers, config)

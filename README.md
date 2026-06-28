@@ -94,9 +94,20 @@ transcribing it and segmenting into **chapters** and **paragraphs** so each
 piece can be processed (and timestamped) individually. Chapter boundaries are
 detected, in order of preference:
 
-1. **Embedded markers** — `.m4b` chapter tables, read via `ffprobe`.
-2. **Spoken headings** — the narrator saying "Chapter One", etc.
-3. **Time windows** — a fixed-length fallback (`chapter_seconds`).
+1. **Per-file** — a *folder* of audio parts (see below): one chapter per file.
+2. **Embedded markers** — `.m4b` chapter tables, read via `ffprobe`.
+3. **Spoken headings** — the narrator saying "Chapter One", etc.
+4. **Time windows** — a fixed-length fallback (`chapter_seconds`).
+
+**Split audiobooks (a folder of mp3s).** Point `--audio` at a *directory* and
+the parts are placed end to end on one timeline (sorted naturally, so `Part 2`
+precedes `Part 10`) with continuous timestamps. Each file becomes a chapter
+(titled from its filename) — the usual layout for split audiobooks:
+
+```bash
+just segment   --audio "audiobooks/Moby Dick/"   # folder of NN - Chapter.mp3 files
+just visualize --audio "audiobooks/Moby Dick/"
+```
 
 Paragraphs are split on the narration's natural pauses landing on sentence
 boundaries (`paragraph_gap`). Tune any of this under `audio:` in `config.yaml`
