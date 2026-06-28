@@ -259,6 +259,48 @@ class Pipeline:
                 self._progress(f"  (portrait failed for {char.name}: {exc})")
         return out
 
+    def regenerate_frame(
+        self,
+        analysis: BookAnalysis,
+        out_dir: Path,
+        scene_id: str,
+        prompt_override: Optional[str] = None,
+        style_override: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> Frame:
+        """Render a single scene's frame (used by the web UI). Always force.
+
+        ``prompt_override`` lets the UI hand-edit the prompt; ``style_override``
+        swaps the visual style for this one frame.
+        """
+        out_dir = Path(out_dir)
+        scene = next((s for s in analysis.scenes if s.id == scene_id), None)
+        if scene is None:
+            raise KeyError(scene_id)
+
+        gen_cfg = self.config.generation
+        provider = get_provider(gen_cfg, dry_run=dry_run)
+        frames_dir = out_dir / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+
+        portraits: dict[str, Path] = {}
+        if gen_cfg.character_portraits and provider.supports_references:
+            needed = {m.lower() for m in scene.characters_present}
+            portraits = self._generate_portraits(analysis, provider, out_dir, False, needed)
+
+        use_refs = provider.supports_references and bool(portraits)
+        style = style_override if style_override is not None else self.config.project.style
+        if prompt_override:
+            prompt = prompt_override
+        else:
+            prompt = build_prompt(
+                scene, analysis, style,
+                include_shot=gen_cfg.shot_variety, with_references=use_refs,
+            )
+        refs = _scene_references(scene, analysis, portraits) if use_refs else []
+        # force=True: a manual regenerate should always produce a fresh image.
+        return self._render_one(provider, scene, prompt, refs, frames_dir, force=True)
+
     def _render_one(
         self, provider, scene, prompt: str, refs: list[Path], frames_dir: Path, force: bool
     ) -> Frame:

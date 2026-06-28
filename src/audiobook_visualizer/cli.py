@@ -105,6 +105,45 @@ def visualize(
 
 
 @app.command()
+def web(
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Output directory to browse (defaults to config)."
+    ),
+    config_path: Optional[Path] = typer.Option(
+        None, "--config", "-c", help="Path to config.yaml."
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host (use 0.0.0.0 in Docker)."),
+    port: int = typer.Option(8000, "--port", help="Bind port."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Regenerate with the offline stub provider (no API calls)."
+    ),
+):
+    """Serve a web UI to browse frames and regenerate them individually."""
+    load_env()
+    config = Config.load(config_path)
+    if out is not None:
+        config.output.dir = str(out)
+
+    try:
+        import uvicorn
+
+        from .web.server import create_app
+    except ImportError:
+        console.print(
+            "[red]Web extras not installed.[/red] Install with "
+            "`pip install -e '.[web]'` (or use the Docker image / `just web`)."
+        )
+        raise typer.Exit(code=1)
+
+    application = create_app(config.output.dir, config, dry_run=dry_run)
+    console.print(
+        f"[green]Serving[/green] {config.output.dir} at "
+        f"[underline]http://{host}:{port}[/underline]  (Ctrl-C to stop)"
+    )
+    uvicorn.run(application, host=host, port=port, log_level="warning")
+
+
+@app.command()
 def segment(
     audio: Path = typer.Option(..., "--audio", "-a", help="Path to the audiobook file."),
     config_path: Optional[Path] = typer.Option(

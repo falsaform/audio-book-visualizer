@@ -31,12 +31,12 @@ WORKDIR /app
 #    layer is cached across source changes.
 COPY pyproject.toml uv.lock README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --extra audio --extra dev
+    uv sync --frozen --no-install-project --extra audio --extra web --extra dev
 
 # 2) Add the project source and install the package (editable).
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --extra audio --extra dev
+    uv sync --frozen --extra audio --extra web --extra dev
 
 # Whisper / huggingface model cache lives here (mounted as a volume in compose).
 # Left separate from uv's cache (~/.cache/uv) so each gets its own volume.

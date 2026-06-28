@@ -193,7 +193,23 @@ just visualize --audio book.m4b --provider gemini   # Nano Banana, with portrait
 just visualize --ebook book.epub --force            # rebuild every frame
 ```
 
-## Configuration
+## Web UI
+
+Browse the frames and **regenerate any one of them individually** — tweak its
+prompt or swap a style, click regenerate, and only that image rebuilds (through
+the same pipeline + cache):
+
+```bash
+just web                       # serves http://localhost:8000 on the configured output dir
+just web --out runs/moby       # browse a specific run
+just web --dry-run             # regenerate with the offline stub provider (no API calls)
+```
+
+It reads an existing run's `analysis.json` + `manifest.json`, so do a
+`visualize` (or `visualize --analyze-only`) first. The page lists every scene;
+selecting one shows its metadata, reference portraits, and an editable prompt
+with a **Regenerate** button. The manifest is updated in place. Locally (outside
+Docker) install the extra: `pip install -e '.[web]'`.
 
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:
@@ -232,7 +248,9 @@ A run writes to `output/` (configurable):
    build a prompt per scene (shot type + canonical character appearances) and
    render it with the configured provider, passing portraits as references where
    supported. Content-addressed caching skips unchanged images.
-5. **Gallery** (`gallery.py`) — assemble frames + metadata into HTML.
+5. **Gallery** (`gallery.py`) — assemble frames + metadata into static HTML.
+6. **Web UI** (`web/`) — a FastAPI app to browse frames and regenerate any one
+   of them on demand (edited prompt / style), reusing the pipeline and cache.
 
 ## Extending
 
@@ -251,11 +269,11 @@ Done:
 - ✅ Reference-image / character-portrait conditioning for stronger consistency.
 - ✅ Shot-type variety (wide/medium/close-up).
 - ✅ Caching so re-runs only regenerate changed scenes.
+- ✅ Web UI for browsing and regenerating individual frames.
 
 Still ahead:
 
 - True forced alignment (e.g. WhisperX) instead of fuzzy excerpt matching.
-- A small web UI for browsing/regenerating individual frames.
 - Per-chapter pacing controls (frame density per chapter).
 
 ## Testing

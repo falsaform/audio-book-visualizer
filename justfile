@@ -62,6 +62,11 @@ segment *args:
 demo:
     {{run}} abv visualize --ebook examples/sample.txt --dry-run --max-frames 4
 
+# Serve the web UI (browse + regenerate frames) at http://localhost:8000
+# Pass extra args, e.g. `just web --dry-run` or `just web --out runs/moby`
+web *args:
+    {{compose}} run --rm --service-ports {{service}} abv web --host 0.0.0.0 {{args}}
+
 # --- quality ---------------------------------------------------------------
 
 # Run the test suite (pass extra args, e.g. `just test -k align`)
