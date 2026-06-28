@@ -17,6 +17,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # When run as a non-root host UID, keep uv's cache in the world-writable
+      # /cache volume (HOME is /home/app in the image).
+      UV_CACHE_DIR: /cache/uv
     working_dir: /app
     # Published when started with `--service-ports` (see `just web`).
     ports:
@@ -26,14 +29,12 @@ services:
       # /opt/venv (outside /app), so it is unaffected by this mount and the
       # editable install keeps pointing at the mounted ./src.
       - .:/app
-      # Persist the whisper / huggingface model cache between runs.
-      - model-cache:/cache
-      # Persist uv's download cache for fast re-syncs.
-      - uv-cache:/root/.cache/uv
+      # Persist whisper/huggingface models + uv cache between runs. World-writable
+      # (chmod 777 in the image) so an arbitrary host UID can populate it.
+      - cache:/cache
     # Keep stdin/tty so the rich CLI renders nicely under `docker compose run`.
     stdin_open: true
     tty: true
 
 volumes:
-  model-cache:
-  uv-cache:
+  cache:

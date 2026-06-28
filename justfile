@@ -3,9 +3,15 @@
 
 compose := "docker compose"
 service := "app"
-run := compose + " run --rm " + service
+# Run as the host user/group so files written to ./output (and the rest of the
+# bind-mounted workspace) are owned by you, not root. Falls back to root on hosts
+# without `id` (e.g. native Windows — use WSL).
+uid := `id -u 2>/dev/null || echo 0`
+gid := `id -g 2>/dev/null || echo 0`
+asuser := "--user " + uid + ":" + gid
+run := compose + " run --rm " + asuser + " " + service
 # Non-interactive variant (no TTY) for CI and scripted use.
-runci := compose + " run --rm -T " + service
+runci := compose + " run --rm -T " + asuser + " " + service
 
 # Show available recipes
 default:

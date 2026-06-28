@@ -63,6 +63,12 @@ just demo       # offline dry-run on the bundled sample (stub frames)
 just shell      # open a shell in the container
 ```
 
+> **File ownership.** `just` runs the container as your host user/group
+> (`--user $(id -u):$(id -g)`), so everything written to `output/` is owned by
+> **you** — you can edit `analysis.json` and delete frames without `sudo`. This
+> needs a Unix host (Linux/macOS/WSL). If you built an earlier image, run
+> `just down` once to drop the old root-owned cache volumes, then `just build`.
+
 ## Quickstart
 
 All commands run in the container; pass CLI flags straight through `just`:

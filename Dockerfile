@@ -38,9 +38,20 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra audio --extra web --extra dev
 
-# Whisper / huggingface model cache lives here (mounted as a volume in compose).
-# Left separate from uv's cache (~/.cache/uv) so each gets its own volume.
-ENV HF_HOME=/cache/huggingface
+# Run as the host user (so files written to the bind-mounted workspace are owned
+# by you, not root — see `just`/compose). That means an arbitrary UID/GID must be
+# able to write caches + a home, and reach the claude CLI under /root:
+#  - /cache and /home/app world-writable (named cache volume + HOME)
+#  - /root traversable and /root/.local readable so `claude` on PATH works
+RUN mkdir -p /cache /home/app \
+    && chmod 0777 /cache /home/app \
+    && chmod a+rx /root \
+    && chmod -R a+rX /root/.local
+
+# Whisper/huggingface models and uv's runtime cache live under /cache (a named
+# volume in compose, world-writable so any UID can populate it).
+ENV HF_HOME=/cache/huggingface \
+    HOME=/home/app
 
 # No fixed ENTRYPOINT: the venv is on PATH, so `abv`, `pytest`, `ruff` and
 # `python` are all directly runnable. The justfile drives which one to call.
