@@ -225,8 +225,14 @@ is set, else `gemini` if `GEMINI_API_KEY` is set. Force one with
 |----------|-------|------------------|-------|
 | `auto`   | — | — | Pick from available keys (default). |
 | `openai` | `dall-e-3` | ✗ | Consistency via text descriptions only. |
-| `gemini` | `gemini-2.5-flash-image` ("Nano Banana") | ✓ | Strongest character consistency. |
+| `gemini` | `gemini-2.5-flash-image` ("Nano Banana") | ✓ | Strongest character consistency. Needs **billing** (free tier is often 0 for image models). |
 | `stub`   | — | ✓ | Offline placeholder cards (`--dry-run`). |
+
+> Gemini image generation typically requires **billing enabled** on your Google
+> AI project — the free tier quota for image models is frequently `0`. If you hit
+> a `429 RESOURCE_EXHAUSTED` with `limit: 0`, that's the cause: enable billing,
+> switch with `--provider openai`, or test the pipeline offline with `--dry-run`.
+> For low rate limits, lower `generation.concurrency`.
 
 **Character portraits.** When the provider supports reference images (Gemini),
 the pipeline first renders one **reference portrait per character** that appears,

@@ -9,6 +9,7 @@ Run ``abv --help`` for all options.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -375,8 +376,6 @@ def characters(
     analysis_json: Path = typer.Argument(..., help="Path to a generated analysis.json."),
 ):
     """Print the character bible from a previous analysis."""
-    import json
-
     from .models import BookAnalysis
 
     data = json.loads(Path(analysis_json).read_text())
@@ -400,6 +399,22 @@ def _summary(analysis, out_dir: str) -> None:
     console.print(
         f"  {len(analysis.characters)} characters · {len(analysis.scenes)} scenes"
     )
+
+    # Report frame outcomes from the manifest, if generation ran.
+    manifest = Path(out_dir) / "manifest.json"
+    if manifest.exists():
+        try:
+            frames = json.loads(manifest.read_text())
+        except (json.JSONDecodeError, OSError):
+            frames = []
+        ok = [f for f in frames if f.get("image_path") and not f.get("error")]
+        failed = [f for f in frames if f.get("error")]
+        console.print(f"  {len(ok)}/{len(frames)} frames generated")
+        if failed:
+            console.print(f"  [yellow]⚠ {len(failed)} frame(s) failed.[/yellow]")
+            first = failed[0]["error"].splitlines()[0][:200]
+            console.print(f"    [dim]{first}[/dim]")
+
     console.print(f"  Output: [underline]{out_dir}[/underline]")
     gallery = Path(out_dir) / "gallery.html"
     if gallery.exists():

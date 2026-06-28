@@ -178,6 +178,31 @@ def test_resolve_provider_auto_no_keys_errors(monkeypatch):
         _resolve_provider("auto", "dall-e-3")
 
 
+def test_gemini_error_classification():
+    from audiobook_visualizer.generation import gemini_provider as gp
+
+    hard = "429 RESOURCE_EXHAUSTED ... limit: 0, model: gemini-2.5-flash-image"
+    soft = "429 RESOURCE_EXHAUSTED PerMinute ... 'Please retry in 11.5s'"
+    assert gp._is_quota_error(Exception(hard))
+    assert gp._is_quota_error(Exception(soft))
+    assert gp._is_hard_quota(Exception(hard))  # limit: 0 -> hard
+    assert not gp._is_hard_quota(Exception(soft))
+    assert not gp._is_quota_error(Exception("500 internal error"))
+    # retry-after parsed from the payload.
+    assert gp._retry_after(Exception("Please retry in 11.5s"), 99) == 11.5
+    assert gp._retry_after(Exception("no hint"), 7.0) == 7.0
+
+
+def test_gemini_human_message_strips_json():
+    from audiobook_visualizer.generation import gemini_provider as gp
+
+    err = "ClientError ... {'error': {'message': 'You exceeded your current quota', 'code': 429}}"
+    msg = gp._quota_message(Exception(err), hard=True)
+    assert "You exceeded your current quota" in msg
+    assert "billing" in msg
+    assert "{" not in msg  # no raw JSON in the surfaced message
+
+
 def test_factory_selects_gemini(monkeypatch):
     captured = {}
 
