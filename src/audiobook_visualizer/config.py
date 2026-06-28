@@ -108,9 +108,15 @@ class DirectorTimingConfig(BaseModel):
 
 
 def _default_roster() -> "list[RoleConfig]":
-    # The crew runs these in order. Script critic + continuity arrive in a later
-    # slice; add/disable/reorder roles here to "specify multiple sub agents".
-    return [RoleConfig(name="script_writer"), RoleConfig(name="director")]
+    # The crew runs in this order: the writer drafts scenes, the critic revises
+    # them, the director breaks each into shots, and continuity checks the result.
+    # Add/disable/reorder roles here to "specify multiple sub agents".
+    return [
+        RoleConfig(name="script_writer"),
+        RoleConfig(name="script_critic"),
+        RoleConfig(name="director"),
+        RoleConfig(name="continuity"),
+    ]
 
 
 class CrewConfig(BaseModel):

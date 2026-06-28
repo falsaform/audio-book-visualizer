@@ -6,10 +6,19 @@ from audiobook_visualizer.models import AudioChapter, AudiobookStructure, Charac
 
 
 class FakeRunner:
-    """Dispatches on the role's system prompt to return canned writer/director JSON."""
+    """Dispatches on the role's system prompt to return canned per-role JSON.
+
+    Checks the specific roles before "screenwriter" — the critic's system prompt
+    legitimately contains the word "screenwriter" ("a screenwriter's breakdown").
+    """
 
     def json(self, role, system, prompt, max_tokens=4096):
-        if "screenwriter" in system.lower():
+        s = system.lower()
+        if "script editor" in s:           # critic: accept by default
+            return {"revise": False, "notes": []}
+        if "continuity" in s:              # continuity: no notes by default
+            return []
+        if "screenwriter" in s:            # script writer
             return [
                 {"start_paragraph": 0, "heading": "EXT. HARBOR - DAWN", "title": "Arrival",
                  "synopsis": "x", "action": "y", "setting": "harbor", "time_of_day": "dawn",
@@ -18,7 +27,7 @@ class FakeRunner:
                  "synopsis": "x", "action": "y", "setting": "ship", "time_of_day": "night",
                  "mood": "ominous", "characters_present": ["Ahab"]},
             ]
-        return [
+        return [                            # director
             {"shot_type": "wide", "camera_move": "push in", "subject": "harbor",
              "visual_description": "grey harbor", "characters_present": [], "duration_weight": 2},
             {"shot_type": "close-up", "camera_move": "NONSENSE", "subject": "face",
@@ -38,10 +47,14 @@ def _structure() -> AudiobookStructure:
     ])
 
 
-def _crew() -> Crew:
+def _director_cfg() -> Config:
     cfg = Config()
     cfg.analysis.mode = "director"
-    return Crew(cfg, FakeRunner())
+    return cfg
+
+
+def _crew() -> Crew:
+    return Crew(_director_cfg(), FakeRunner())
 
 
 def test_writer_scenes_tile_the_chapter():
@@ -80,6 +93,79 @@ def test_max_shots_per_scene_is_capped():
 
     scenes = Crew(cfg, ManyShots()).build(_structure(), [])
     assert all(len(s.shots) == 1 for s in scenes)
+
+
+def test_script_critic_revises_then_accepts():
+    class CriticRunner:
+        def __init__(self):
+            self.critic_calls = 0
+
+        def json(self, role, system, prompt, max_tokens=4096):
+            s = system.lower()
+            if "script editor" in s:
+                self.critic_calls += 1
+                return {"revise": self.critic_calls == 1,  # revise once, then accept
+                        "notes": [{"scene": 0, "issue": "split it", "suggestion": "x",
+                                   "severity": "major"}]}
+            if "continuity" in s:
+                return []
+            if "screenwriter" in s:
+                title = "Revised" if "EDITOR'S NOTES" in prompt else "Original"
+                return [{"start_paragraph": 0, "heading": "H", "title": title, "synopsis": "",
+                         "action": "", "setting": "", "time_of_day": "", "mood": "",
+                         "characters_present": []}]
+            return [{"shot_type": "wide", "camera_move": "static", "subject": "x",
+                     "visual_description": "d", "characters_present": [], "duration_weight": 1}]
+
+    runner = CriticRunner()
+    scenes = Crew(_director_cfg(), runner).build(_structure(), [])
+    assert runner.critic_calls == 2          # revise, then accept
+    assert all(s.title == "Revised" for s in scenes)
+    assert all(s.revision == 1 for s in scenes)
+
+
+def test_critic_loop_bounded_by_max_revisions():
+    cfg = _director_cfg()
+    cfg.crew.max_revisions = 2
+
+    class AlwaysRevise(FakeRunner):
+        def __init__(self):
+            self.critic_calls = 0
+
+        def json(self, role, system, prompt, max_tokens=4096):
+            s = system.lower()
+            if "script editor" in s:
+                self.critic_calls += 1
+                return {"revise": True, "notes": []}
+            if "continuity" in s:
+                return []
+            return super().json(role, system, prompt, max_tokens)
+
+    runner = AlwaysRevise()
+    scenes = Crew(cfg, runner).build(_structure(), [])
+    assert runner.critic_calls == 2          # capped, doesn't loop forever
+    assert all(s.revision == 2 for s in scenes)
+
+
+def test_continuity_review_returns_notes():
+    class ContRunner(FakeRunner):
+        def json(self, role, system, prompt, max_tokens=4096):
+            if "continuity" in system.lower():
+                return [
+                    {"severity": "warning", "category": "wardrobe",
+                     "message": "the hat appears then vanishes", "proposed_fix": "keep the hat"},
+                    {"message": ""},  # dropped: no message
+                    {"severity": "nonsense", "category": "x", "message": "bad sev -> info"},
+                ]
+            return super().json(role, system, prompt, max_tokens)
+
+    crew = Crew(_director_cfg(), ContRunner())
+    scenes = crew.build(_structure(), [])
+    notes = crew.review_continuity(scenes, [])
+    assert len(notes) == 2
+    assert notes[0]["severity"] == "warning" and notes[0]["category"] == "wardrobe"
+    assert notes[0]["proposed_fix"] == "keep the hat"
+    assert notes[1]["severity"] == "info"  # coerced
 
 
 def test_writer_failure_falls_back_to_whole_chapter():

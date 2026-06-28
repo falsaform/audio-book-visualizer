@@ -282,6 +282,12 @@ class Pipeline:
         self._progress(
             f"Persisted {len(scenes)} screenplay scene(s), {total_shots} shot(s) to production.db"
         )
+
+        # Continuity supervisor: flag inconsistencies across the built shot list.
+        notes = crew.review_continuity(scenes, characters)
+        if notes:
+            store.add_continuity_notes(segment_id, notes)
+            self._progress(f"Logged {len(notes)} continuity note(s) to production.db")
         return segment_id
 
     def generate(

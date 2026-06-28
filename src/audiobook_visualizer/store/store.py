@@ -346,6 +346,7 @@ class ProductionStore:
                     setting=scene.setting, time_of_day=scene.time_of_day, mood=scene.mood,
                     action=scene.action, source_excerpt=scene.source_excerpt,
                     start_time=scene.start_time, end_time=scene.end_time,
+                    revision=getattr(scene, "revision", 0),
                 )
                 s.add(row)
                 s.commit()

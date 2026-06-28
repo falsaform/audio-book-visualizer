@@ -377,10 +377,12 @@ the frame count / cost). Needs an audiobook structure (the paragraph timestamps)
 
 Instead of one frame per scene/paragraph, **director mode** runs a small crew of
 role-agents that work like a film team: a **screenwriter** breaks the chapter into
-proper scenes (slug line, action, beats), then a **director** breaks each scene
-into a **shot list** — shot type, composition, and a **camera move** (`push_in`,
-`pull_out`, `pan_*`, `tilt_*`, `track_*`, `static`). One image is generated per
-shot.
+proper scenes (slug line, action, beats), a **script critic** reviews and sends
+them back for a bounded number of revisions, a **director** breaks each scene into
+a **shot list** — shot type, composition, and a **camera move** (`push_in`,
+`pull_out`, `pan_*`, `tilt_*`, `track_*`, `static`) — and a **continuity**
+supervisor flags inconsistencies (logged to `production.db`). One image is
+generated per shot.
 
 ```bash
 just visualize --structure output/swarm/audiobook_structure_0000-60min.json --director
@@ -394,8 +396,8 @@ has its own `model`, `max_turns` and optional `system_prompt`, and `crew.agent_m
 runs each role as an autonomous multi-turn Claude Code agent (needs the `claude`
 CLI) rather than a single structured call. Needs an audiobook structure.
 
-> Camera moves are recorded now; rendering them as motion in the animatic, plus a
-> script-critic + continuity pass, land in the following slices.
+> Camera moves are recorded now; rendering them as per-shot motion in the animatic
+> lands in the next slice (the video still uses the global Ken Burns for the moment).
 
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:

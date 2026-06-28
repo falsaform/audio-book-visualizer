@@ -9,6 +9,7 @@ production store happens in the pipeline (agents never touch the DB).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -49,6 +50,7 @@ class SceneDraft:
     source_excerpt: str = ""
     start_time: float = 0.0
     end_time: float = 0.0
+    revision: int = 0  # bumped each time the script critic sends it back
     narration: str = ""  # transient: fed to the director, not persisted
     shots: list[ShotDraft] = field(default_factory=list)
 
@@ -65,6 +67,7 @@ class Crew:
         self, structure: AudiobookStructure, characters: list[Character]
     ) -> list[SceneDraft]:
         writer = self._roles.get("script_writer")
+        critic = self._roles.get("script_critic")
         director = self._roles.get("director")
         char_summary = _character_summary(characters)
 
@@ -75,6 +78,10 @@ class Crew:
                 continue
             if writer and writer.enabled:
                 drafts = self._write_scenes(writer, chapter.title, paras, char_summary)
+                if critic and critic.enabled:
+                    drafts = self._critique(
+                        writer, critic, chapter.title, paras, drafts, char_summary
+                    )
             else:
                 drafts = [_whole_chapter_scene(chapter.title, paras)]
 
@@ -111,6 +118,9 @@ class Crew:
             self._progress(f"  (script writer failed: {exc})")
             return [_whole_chapter_scene(chapter_title, paras)]
 
+        return self._parse_writer_scenes(data, chapter_title, paras)
+
+    def _parse_writer_scenes(self, data, chapter_title: str, paras) -> list[SceneDraft]:
         items = [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
         if not items:
             return [_whole_chapter_scene(chapter_title, paras)]
@@ -152,6 +162,49 @@ class Crew:
                 narration=text,
             ))
         return drafts
+
+    # -- script critic (revision loop) --------------------------------------
+
+    def _critique(
+        self, writer: RoleConfig, critic: RoleConfig, chapter_title: str, paras,
+        scenes: list[SceneDraft], char_summary: str,
+    ) -> list[SceneDraft]:
+        numbered = "\n".join(f"[{i}] {p.text}" for i, p in enumerate(paras))
+        note = f" '{chapter_title}'" if chapter_title else ""
+        revision = 0
+        for _ in range(max(0, self.config.crew.max_revisions)):
+            scenes_json = _scenes_json(scenes)
+            try:
+                verdict = self.runner.json(
+                    critic, prompts.SCRIPT_CRITIC_SYSTEM,
+                    prompts.SCRIPT_CRITIC_PROMPT.format(
+                        scenes=scenes_json, chapter_note=note, paragraphs=numbered),
+                    max_tokens=2048,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._progress(f"  (script critic failed: {exc})")
+                break
+            if not (isinstance(verdict, dict) and verdict.get("revise")):
+                break
+            notes = verdict.get("notes") or []
+            self._progress(f"  critic: revising{note} ({len(notes)} note(s))")
+            try:
+                data = self.runner.json(
+                    writer, prompts.SCRIPT_WRITER_SYSTEM,
+                    prompts.SCRIPT_WRITER_REVISE_PROMPT.format(
+                        notes=_json(notes), scenes=scenes_json,
+                        characters=char_summary or "(none identified)",
+                        chapter_note=note, paragraphs=numbered),
+                    max_tokens=4096,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._progress(f"  (revision failed: {exc})")
+                break
+            scenes = self._parse_writer_scenes(data, chapter_title, paras)
+            revision += 1
+        for sd in scenes:
+            sd.revision = revision
+        return scenes
 
     # -- director -----------------------------------------------------------
 
@@ -199,8 +252,78 @@ class Crew:
         for shot, (s, e) in zip(sd.shots, spans):
             shot.start_time, shot.end_time = s, e
 
+    # -- continuity ---------------------------------------------------------
+
+    def review_continuity(
+        self, scenes: list[SceneDraft], characters: list[Character]
+    ) -> list[dict]:
+        """Flag continuity problems across the built shot list. Returns note dicts
+        ready for :meth:`ProductionStore.add_continuity_notes` (empty if disabled)."""
+        role = self._roles.get("continuity")
+        if not (role and role.enabled) or not scenes:
+            return []
+        try:
+            data = self.runner.json(
+                role, prompts.CONTINUITY_SYSTEM,
+                prompts.CONTINUITY_PROMPT.format(
+                    characters=_character_summary(characters) or "(none identified)",
+                    sequence=_sequence_json(scenes),
+                ),
+                max_tokens=3072,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._progress(f"  (continuity failed: {exc})")
+            return []
+        notes: list[dict] = []
+        for d in (data if isinstance(data, list) else []):
+            if not isinstance(d, dict):
+                continue
+            message = str(d.get("message", "")).strip()
+            if not message:
+                continue
+            fix = str(d.get("proposed_fix", "")).strip()
+            notes.append({
+                "severity": _severity(d.get("severity")),
+                "category": str(d.get("category", "")).strip()[:40],
+                "message": message,
+                "proposed_fix": fix or None,
+                "status": "open",
+            })
+        self._progress(f"  continuity: {len(notes)} note(s)")
+        return notes
+
 
 # -- helpers -----------------------------------------------------------------
+
+
+def _scenes_json(scenes: list[SceneDraft]) -> str:
+    return _json([
+        {"scene": i, "heading": s.heading, "title": s.title,
+         "synopsis": s.summary, "action": s.action}
+        for i, s in enumerate(scenes)
+    ])
+
+
+def _sequence_json(scenes: list[SceneDraft]) -> str:
+    return _json([
+        {"scene": i, "heading": s.heading, "title": s.title,
+         "shots": [
+             {"shot": j, "shot_type": sh.shot_type, "camera_move": sh.camera_move,
+              "subject": sh.subject, "visual_description": sh.visual_description,
+              "characters_present": sh.characters_present}
+             for j, sh in enumerate(s.shots)
+         ]}
+        for i, s in enumerate(scenes)
+    ])
+
+
+def _json(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=str)[:12000]
+
+
+def _severity(value) -> str:
+    sev = str(value or "").strip().lower()
+    return sev if sev in ("info", "warning", "error") else "info"
 
 
 def _whole_chapter_scene(chapter_title: str, paras) -> SceneDraft:

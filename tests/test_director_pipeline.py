@@ -17,6 +17,14 @@ class FakeClient:
 
     def complete_json(self, system, prompt, max_tokens=4096):
         s = system.lower()
+        # Check the specific roles before "screenwriter": the critic's system
+        # prompt also contains that word.
+        if "script editor" in s:
+            return {"revise": False, "notes": []}  # critic accepts the breakdown
+        if "continuity" in s:
+            return [{"severity": "warning", "category": "wardrobe",
+                     "message": "Ahab's coat changes color between shots",
+                     "proposed_fix": "fix the coat"}]
         if "screenwriter" in s:
             return [{"start_paragraph": 0, "heading": "EXT. HARBOR - DAWN", "title": "Arrival",
                      "synopsis": "x", "action": "y", "setting": "harbor", "time_of_day": "dawn",
@@ -72,6 +80,9 @@ def test_director_mode_writes_screenplay_and_shots(tmp_path, monkeypatch):
     # Frames were generated (stub) for each shot.
     frames = sorted(p.name for p in (book / "0000-2min" / "frames").glob("*.png"))
     assert len(frames) == 2
+    # The continuity supervisor's note was persisted.
+    notes = store.list_continuity_notes(seg_id)
+    assert len(notes) == 1 and notes[0].category == "wardrobe"
 
 
 def test_director_without_structure_falls_back(tmp_path, monkeypatch):

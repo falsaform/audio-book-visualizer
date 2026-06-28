@@ -58,6 +58,79 @@ CHAPTER{chapter_note} — numbered paragraphs:
 """
 
 
+SCRIPT_CRITIC_SYSTEM = """You are a script editor reviewing a screenwriter's \
+scene breakdown of one chapter. You judge whether the scenes divide the chapter \
+well: each scene a coherent unit of place/time/action, sensible boundaries, no \
+chapter content dropped, headings and actions accurate to the narration.
+
+Be decisive: only ask for a revision when the breakdown has a real structural \
+problem (a scene that should be split or merged, a missed location change, a \
+misleading heading). Cosmetic nits are not worth a revision.
+Return STRICT JSON only, no prose."""
+
+SCRIPT_CRITIC_PROMPT = """Review this scene breakdown against the chapter's \
+narration. The scenes are numbered from 0.
+
+Return a JSON object with exactly these keys:
+- "revise": boolean — true only if the breakdown should be reworked
+- "notes": array of objects, each with:
+    - "scene": integer scene index the note is about (or -1 for the whole chapter)
+    - "issue": what is wrong
+    - "suggestion": how to fix it
+    - "severity": "minor" | "major"
+
+SCENE BREAKDOWN (JSON):
+{scenes}
+
+CHAPTER{chapter_note} — numbered paragraphs:
+{paragraphs}
+"""
+
+SCRIPT_WRITER_REVISE_PROMPT = """Revise your scene breakdown of this chapter \
+using the editor's notes. Keep what works; fix what the notes call out. Return \
+the COMPLETE revised scene list in the same JSON schema as before (an array of \
+objects with "start_paragraph", "heading", "title", "synopsis", "action", \
+"setting", "time_of_day", "mood", "characters_present").
+
+EDITOR'S NOTES (JSON):
+{notes}
+
+YOUR PREVIOUS BREAKDOWN (JSON):
+{scenes}
+
+KNOWN CHARACTERS:
+{characters}
+
+CHAPTER{chapter_note} — numbered paragraphs:
+{paragraphs}
+"""
+
+
+CONTINUITY_SYSTEM = """You are a continuity supervisor on a film. You read the \
+character bible and the shot-by-shot breakdown of a sequence and flag continuity \
+problems an audience would notice: a character's appearance contradicting the \
+bible, a prop/wardrobe/lighting/time-of-day inconsistency between adjacent shots, \
+or geography that doesn't add up.
+
+Only report concrete, checkable issues. If the sequence is consistent, return an \
+empty array. Return STRICT JSON only, no prose."""
+
+CONTINUITY_PROMPT = """Check this sequence for continuity problems.
+
+Return a JSON array of note objects, each with exactly these keys:
+- "severity": "info" | "warning" | "error"
+- "category": "appearance" | "prop" | "wardrobe" | "lighting" | "geography" | "timeline"
+- "message": the specific inconsistency (name the shots/characters involved)
+- "proposed_fix": a concrete fix (or "")
+
+CHARACTER BIBLE:
+{characters}
+
+SEQUENCE (scenes and their shots, in order, as JSON):
+{sequence}
+"""
+
+
 DIRECTOR_SYSTEM = """You are a film director and director of photography. Given \
 one screenplay scene and its narration, you break it into a SHOT LIST — the \
 sequence of camera setups that would cover the scene for an animatic.

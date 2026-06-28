@@ -94,6 +94,33 @@ def test_continuity_notes_roundtrip(tmp_path):
     assert len(open_notes) == 1 and open_notes[0].message == "hat changed"
 
 
+def test_persist_screenplay_keeps_multi_shot_scenes_and_revision(tmp_path):
+    from audiobook_visualizer.crew import SceneDraft, ShotDraft
+
+    store, pid = _store(tmp_path)
+    sid = store.get_or_create_segment(pid, "full", 0.0, 100.0)
+    store.upsert_characters(pid, [Character(name="Ahab", description="x")])
+    scenes = [
+        SceneDraft(
+            heading="INT. SHIP - NIGHT", title="Brooding", start_time=0.0, end_time=100.0,
+            revision=2, characters_present=["Ahab"],
+            shots=[
+                ShotDraft(shot_type="wide", camera_move="push_in", visual_description="deck",
+                          start_time=0.0, end_time=60.0),
+                ShotDraft(shot_type="close-up", camera_move="tilt_up", visual_description="face",
+                          characters_present=["Ahab"], start_time=60.0, end_time=100.0),
+            ],
+        )
+    ]
+    store.persist_screenplay(pid, sid, scenes)
+    view = store.segment_view(sid)
+    assert [sh.camera_move for sh in view.shots] == ["push_in", "tilt_up"]
+    assert all(sh.heading == "INT. SHIP - NIGHT" for sh in view.shots)
+    # Shots keep their global order across the scene.
+    assert [sh.order_index for sh in view.shots] == [0, 1]
+    assert view.shots[1].characters_present == ["Ahab"]
+
+
 def test_load_segment_analysis_roundtrips_render_units(tmp_path):
     store, pid = _store(tmp_path)
     sid = store.get_or_create_segment(pid, "full", 0.0, 100.0)
