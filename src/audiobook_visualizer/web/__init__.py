@@ -1,5 +1,5 @@
-"""Web UI for browsing and regenerating frames."""
+"""Web UI (Django + Django Ninja) for browsing, editing and re-rendering shots."""
 
-from .server import create_app
+from .app import create_app
 
 __all__ = ["create_app"]

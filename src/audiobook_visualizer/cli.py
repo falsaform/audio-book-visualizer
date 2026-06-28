@@ -187,7 +187,7 @@ def web(
     try:
         import uvicorn
 
-        from .web.server import create_app
+        from .web import create_app
     except ImportError:
         console.print(
             "[red]Web extras not installed.[/red] Install with "

@@ -151,6 +151,21 @@ class ContinuityNote(SQLModel, table=True):
     status: str = "open"  # open | acknowledged | resolved
 
 
+class RenderJob(SQLModel, table=True):
+    """An async frame re-render request (the web UI enqueues these)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    segment_id: int = Field(foreign_key="segment.id", index=True)
+    shot_slug: str = Field(index=True)
+    prompt_override: Optional[str] = None
+    style_override: Optional[str] = None
+    status: str = Field(default="queued", index=True)  # queued | running | done | error
+    error: Optional[str] = None
+    image_path: Optional[str] = None
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+
 # --- designed now, populated by a later slice (set/costume design) ---------
 
 

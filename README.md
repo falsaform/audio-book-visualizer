@@ -303,14 +303,14 @@ just visualize --ebook book.epub --force            # rebuild every frame
 
 ## Web UI
 
-Browse the frames and **regenerate any one of them individually** — tweak its
-prompt or swap a style, click regenerate, and only that image rebuilds (through
-the same pipeline + cache):
+A **Django + Django Ninja** JSON API serves a **Vite + TypeScript + React** single-
+page app. The TS client and **TanStack Query** hooks are generated from the API's
+OpenAPI schema with **Kubb**, so the frontend is fully typed end-to-end.
 
 ```bash
 just web                       # serves http://localhost:8000 on the configured output dir
 just web --out runs/moby       # browse a specific run
-just web --dry-run             # regenerate with the offline stub provider (no API calls)
+just web --dry-run             # re-render with the offline stub provider (no API calls)
 ```
 
 It reads an existing run's `production.db`, so do a `visualize` (or `visualize
@@ -320,11 +320,28 @@ image model. From there you can:
 
 - **edit the shot** — its visual description, **camera move**, and shot type;
 - **split a shot** into two halves and edit each independently;
-- **re-render** the frame (optionally with a hand-edited prompt or style override).
+- **re-render** the frame **asynchronously** — the API enqueues a `RenderJob`
+  (worked off by an in-process pool) and the UI polls it to completion, so the page
+  stays responsive while the image renders.
 
-All edits and the new frames are persisted to the store, and any continuity notes
-from director mode show as a badge in the header. Locally (outside Docker) install
-the extra: `pip install -e '.[web]'`.
+All edits and new frames are persisted to the store; continuity notes from director
+mode show as a header badge. Locally install the API extra with
+`pip install -e '.[web]'`.
+
+**Building the frontend.** The SPA lives in `frontend/` and is served as static
+files by Django once built:
+
+```bash
+cd frontend
+npm install
+npm run openapi      # export the OpenAPI schema from the Ninja API
+npm run generate     # Kubb -> typed client + TanStack Query hooks (src/gen)
+npm run build        # Vite -> frontend/dist (Django serves it)
+# or `npm run dev` for the Vite dev server (proxies /api to :8000)
+```
+
+Until `frontend/dist` exists the server returns a small placeholder page; the JSON
+API under `/api/…` works regardless.
 
 ## Video
 
@@ -458,8 +475,9 @@ Per run / per chunk:
    render it with the configured provider, passing portraits as references where
    supported. Content-addressed caching skips unchanged images.
 5. **Gallery** (`gallery.py`) — assemble frames + metadata into static HTML.
-6. **Web UI** (`web/`) — a FastAPI app to browse frames and regenerate any one
-   of them on demand (edited prompt / style), reusing the pipeline and cache.
+6. **Web UI** (`web/` + `frontend/`) — a Django Ninja API and a generated
+   Vite/TS/React SPA to browse, edit, split and asynchronously re-render shots,
+   reusing the pipeline and store.
 
 ## Extending
 

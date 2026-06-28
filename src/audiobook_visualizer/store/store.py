@@ -26,6 +26,7 @@ from .models import (
     ContinuityNote,
     Frame,
     Production,
+    RenderJob,
     SceneCharacterLink,
     ScreenplayScene,
     Segment,
@@ -84,6 +85,17 @@ class SegmentView:
     start: float
     end: float
     shots: list[ShotView] = field(default_factory=list)
+
+
+@dataclass
+class JobView:
+    id: int
+    shot_slug: str
+    status: str
+    error: Optional[str]
+    image_path: Optional[str]
+    created_at: float
+    updated_at: float
 
 
 @dataclass
@@ -624,6 +636,61 @@ class ProductionStore:
                 q = q.where(ContinuityNote.status == status)
             return list(s.exec(q).all())
 
+    # -- render jobs (async re-render queue) --------------------------------
+
+    def create_render_job(
+        self, segment_id: int, shot_slug: str, now: float,
+        prompt_override: Optional[str] = None, style_override: Optional[str] = None,
+    ) -> int:
+        with self._write_lock, self.session() as s:
+            job = RenderJob(
+                segment_id=segment_id, shot_slug=shot_slug,
+                prompt_override=prompt_override, style_override=style_override,
+                status="queued", created_at=now, updated_at=now,
+            )
+            s.add(job)
+            s.commit()
+            return int(job.id)
+
+    def update_render_job(
+        self, job_id: int, status: str, now: float,
+        error: Optional[str] = None, image_path: Optional[str] = None,
+    ) -> None:
+        with self._write_lock, self.session() as s:
+            job = s.get(RenderJob, job_id)
+            if job is None:
+                return
+            job.status = status
+            job.updated_at = now
+            if error is not None:
+                job.error = error
+            if image_path is not None:
+                job.image_path = image_path
+            s.add(job)
+            s.commit()
+
+    def get_render_job(self, job_id: int) -> Optional[JobView]:
+        with self.session() as s:
+            job = s.get(RenderJob, job_id)
+            return _job_view(job) if job else None
+
+    def get_render_job_request(self, job_id: int) -> Optional[tuple[int, str, Optional[str], Optional[str]]]:
+        """``(segment_id, shot_slug, prompt_override, style_override)`` for the worker."""
+        with self.session() as s:
+            job = s.get(RenderJob, job_id)
+            if job is None:
+                return None
+            return (job.segment_id, job.shot_slug, job.prompt_override, job.style_override)
+
+    def list_render_jobs(self, segment_id: int, active_only: bool = False) -> list[JobView]:
+        with self.session() as s:
+            q = select(RenderJob).where(RenderJob.segment_id == segment_id)
+            if active_only:
+                q = q.where(RenderJob.status.in_(("queued", "running")))
+            rows = s.exec(q).all()
+        rows.sort(key=lambda r: r.created_at)
+        return [_job_view(r) for r in rows]
+
 
 # -- helpers -----------------------------------------------------------------
 
@@ -644,6 +711,13 @@ def _enable_sqlite_pragmas(engine) -> None:
         cur.execute("PRAGMA busy_timeout=5000")
         cur.execute("PRAGMA foreign_keys=ON")
         cur.close()
+
+
+def _job_view(job: RenderJob) -> JobView:
+    return JobView(
+        id=int(job.id), shot_slug=job.shot_slug, status=job.status, error=job.error,
+        image_path=job.image_path, created_at=job.created_at, updated_at=job.updated_at,
+    )
 
 
 def _frame_dto(row: Frame, slug: str) -> FrameDTO:
