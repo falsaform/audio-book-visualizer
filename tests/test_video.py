@@ -74,7 +74,7 @@ def test_compile_videos_renders_per_segment_and_master(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_render(seg, audio_files, fps, fade, ken_burns, out, on_progress, log):
+    def fake_render(seg, audio_files, fps, fade, ken_burns, motion, out, on_progress, log):
         calls.append((seg.label, round(seg.start), round(seg.end)))
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"MP4")
@@ -118,15 +118,25 @@ def test_cue_durations_window_relative():
     assert durs == [300.0, 3300.0]  # first 0->300, second 300->window end (3600)
 
 
-def test_ken_burns_filter_alternates_and_zooms():
-    from audiobook_visualizer.video import _ken_burns_vf
+def test_ken_burns_default_is_crop_safe_zoom_out():
+    from audiobook_visualizer.video import Motion, _ken_burns_vf
 
-    even = _ken_burns_vf(0, frames=240, fps=24, w=1792, h=1024)
-    odd = _ken_burns_vf(1, frames=240, fps=24, w=1792, h=1024)
-    assert "zoompan" in even and "s=1792x1024" in even
-    assert "scale=3584:2048" in even  # upscaled 2x to keep zoompan smooth
-    assert "min(zoom+" in even        # even -> zoom in
-    assert "max(zoom-" in odd         # odd  -> zoom out
+    vf = _ken_burns_vf(0, frames=240, fps=24, w=1792, h=1024, motion=Motion())
+    assert "zoompan" in vf and "s=1792x1024" in vf
+    assert "scale=3584:2048" in vf       # upscaled 2x to keep zoompan smooth
+    assert "max(zoom-" in vf             # default "out" -> settles on the full frame
+    assert "*0.300" in vf                # top-biased anchor (heads protected)
+
+
+def test_ken_burns_alternate_and_no_zoom():
+    from audiobook_visualizer.video import Motion, _ken_burns_vf
+
+    even = _ken_burns_vf(0, 240, 24, 1792, 1024, Motion(style="alternate"))
+    odd = _ken_burns_vf(1, 240, 24, 1792, 1024, Motion(style="alternate"))
+    assert "min(zoom+" in even   # even -> in
+    assert "max(zoom-" in odd    # odd  -> out
+    # zoom=1.0 -> a still hold (no crop at all).
+    assert "z='1.0'" in _ken_burns_vf(0, 240, 24, 1792, 1024, Motion(zoom=1.0))
 
 
 def test_render_segment_falls_back_when_ken_burns_fails(tmp_path, monkeypatch):
@@ -146,7 +156,9 @@ def test_render_segment_falls_back_when_ken_burns_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(video_mod, "_render_kenburns", boom)
     monkeypatch.setattr(video_mod, "_render_static", fake_static)
 
-    _render_segment(seg, [], 24, 0.5, True, tmp_path / "o.mp4", None, msgs.append)
+    from audiobook_visualizer.video import Motion
+
+    _render_segment(seg, [], 24, 0.5, True, Motion(), tmp_path / "o.mp4", None, msgs.append)
     assert static_called.get("yes")  # fell back to static
     assert any("Ken Burns failed" in m for m in msgs)
 
@@ -192,7 +204,7 @@ def test_single_chunk_at_book_dir_is_the_result(tmp_path, monkeypatch):
     monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/a.m4b")])
     monkeypatch.setattr(video_mod, "audio_total_duration", lambda p: 100.0)
-    monkeypatch.setattr(video_mod, "_render_segment", lambda *a: Path(a[5]).write_bytes(b"X"))
+    monkeypatch.setattr(video_mod, "_render_segment", lambda *a: Path(a[6]).write_bytes(b"X"))
 
     segments, master = compile_videos(book, "/a.m4b")
     assert master == segments[0] == book / "video.mp4"

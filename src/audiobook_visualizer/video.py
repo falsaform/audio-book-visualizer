@@ -30,6 +30,16 @@ _WINDOW_END_RE = re.compile(r"(\d+)-endmin")
 
 
 @dataclass
+class Motion:
+    """Ken Burns settings. Defaults are crop-safe: a gentle zoom *out* that
+    ends on the full, uncropped frame, anchored slightly high to protect heads."""
+
+    zoom: float = 1.08          # max zoom factor (1.0 = no zoom)
+    style: str = "out"          # "out" | "in" | "alternate"
+    top_bias: float = 0.3       # 0=top-aligned, 0.5=center (keeps heads in frame)
+
+
+@dataclass
 class FrameCue:
     image: Path
     start: float
@@ -137,11 +147,13 @@ def compile_videos(
     fps: int = 24,
     fade: float = 0.5,
     ken_burns: bool = True,
+    motion: Optional[Motion] = None,
     on_log: Optional[LogFn] = None,
     on_progress: Optional[ProgressFn] = None,
 ) -> tuple[list[Path], Optional[Path]]:
     """Render one video per chunk + a master joining them. Returns (segments, master)."""
     log = on_log or (lambda _m: None)
+    motion = motion or Motion()
     if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
         raise RuntimeError("Compiling video requires ffmpeg/ffprobe.")
 
@@ -164,7 +176,7 @@ def compile_videos(
             f"Segment {seg.label}: {len(seg.cues)} frame(s), "
             f"{_fmt(seg.start)}–{_fmt(seg.end)} ({seg.duration / 60:.1f} min)"
         )
-        _render_segment(seg, audio_files, fps, fade, ken_burns, out, on_progress, log)
+        _render_segment(seg, audio_files, fps, fade, ken_burns, motion, out, on_progress, log)
         outputs.append(out)
 
     # Master: concat the segment videos. If the only segment already lives at the
@@ -183,6 +195,7 @@ def _render_segment(
     fps: int,
     fade: float,
     ken_burns: bool,
+    motion: Motion,
     out: Path,
     on_progress: Optional[ProgressFn],
     log: LogFn,
@@ -190,7 +203,7 @@ def _render_segment(
     out.parent.mkdir(parents=True, exist_ok=True)
     if ken_burns:
         try:
-            _render_kenburns(seg, audio_files, fps, fade, out, on_progress)
+            _render_kenburns(seg, audio_files, fps, fade, motion, out, on_progress)
             return
         except Exception as exc:  # noqa: BLE001 - never let a filter quirk break it
             log(f"  (Ken Burns failed, using static frames: {exc})")
@@ -226,7 +239,7 @@ def _render_static(
 
 
 def _render_kenburns(
-    seg: Segment, audio_files: list[Path], fps: int, fade: float,
+    seg: Segment, audio_files: list[Path], fps: int, fade: float, motion: Motion,
     out: Path, on_progress: Optional[ProgressFn],
 ) -> None:
     """Slow zoom/pan (Ken Burns) per still, then concat + mux audio."""
@@ -244,7 +257,7 @@ def _render_kenburns(
             cmd = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-loop", "1", "-i", str(cue.image),
-                "-vf", _ken_burns_vf(i, frames, fps, w, h),
+                "-vf", _ken_burns_vf(i, frames, fps, w, h, motion),
                 "-frames:v", str(frames), "-c:v", "libx264", "-pix_fmt", "yuv420p",
                 "-an", str(clip),
             ]
@@ -291,20 +304,34 @@ def _fade_filter(win: float, fade: float) -> str:
     return ""
 
 
-def _ken_burns_vf(idx: int, frames: int, fps: int, w: int, h: int) -> str:
-    """A subtle zoom (alternating in/out) for one still. Upscale first to keep
-    zoompan smooth (it works in integer output pixels)."""
-    max_zoom = 1.12
+def _ken_burns_vf(idx: int, frames: int, fps: int, w: int, h: int, motion: Motion) -> str:
+    """A crop-safe subtle zoom for one still. Upscale first to keep zoompan smooth.
+
+    Default style "out" starts slightly zoomed and ends at exactly 1.0, so the
+    shot resolves to the *complete* frame — heads/subjects are never left cropped.
+    The window is anchored slightly high (``top_bias``) to keep heads in view even
+    during the zoomed portion.
+    """
+    max_zoom = max(1.0, motion.zoom)
     inc = (max_zoom - 1.0) / max(1, frames)
     up_w, up_h = w * 2, h * 2
-    if idx % 2 == 0:  # slow zoom in
-        z = f"min(zoom+{inc:.6f},{max_zoom:.3f})"
-    else:  # slow zoom out (start zoomed, ease back toward 1.0)
-        z = f"if(eq(on,0),{max_zoom:.3f},max(zoom-{inc:.6f},1.0))"
+
+    style = motion.style
+    if style == "alternate":
+        style = "in" if idx % 2 == 0 else "out"
+    if style == "in" and max_zoom > 1.0:
+        z = f"min(zoom+{inc:.6f},{max_zoom:.4f})"
+    elif max_zoom > 1.0:  # "out": start zoomed, settle on the full frame
+        z = f"if(eq(on,0),{max_zoom:.4f},max(zoom-{inc:.6f},1.0))"
+    else:
+        z = "1.0"
+
+    x = "(iw-iw/zoom)/2"  # centered horizontally
+    y = f"(ih-ih/zoom)*{motion.top_bias:.3f}"  # biased toward the top (heads)
     return (
         f"scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
         f"crop={up_w}:{up_h},"
-        f"zoompan=z='{z}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"zoompan=z='{z}':d={frames}:x='{x}':y='{y}':"
         f"s={w}x{h}:fps={fps},format=yuv420p"
     )
 

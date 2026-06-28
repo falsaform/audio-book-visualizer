@@ -14,6 +14,12 @@ from ..models import BookAnalysis, Character, Scene
 # none to avoid garbled captions in frames.
 _NEGATIVE = "No text, no words, no captions, no watermark, no signature."
 
+# Headroom so subtle camera motion (Ken Burns) in the video never crops faces.
+_FRAMING = (
+    "Compose with margin and headroom: keep characters fully within the frame, "
+    "heads and faces well clear of the edges."
+)
+
 
 def build_prompt(
     scene: Scene,
@@ -65,6 +71,7 @@ def build_prompt(
     if style:
         parts.append(f"Style: {style}.")
 
+    parts.append(_FRAMING)
     parts.append(_NEGATIVE)
     return " ".join(p.strip() for p in parts if p.strip())
 

@@ -353,6 +353,12 @@ def video(
     ken_burns: bool = typer.Option(
         True, "--ken-burns/--no-ken-burns", help="Slow zoom/pan on each still (cinematic)."
     ),
+    zoom: float = typer.Option(
+        1.08, "--zoom", help="Ken Burns max zoom (1.0 = none; smaller = less crop)."
+    ),
+    motion: str = typer.Option(
+        "out", "--motion", help="Ken Burns style: out|in|alternate ('out' never leaves a crop)."
+    ),
 ):
     """Compile generated frames + audio into timed videos (mp4).
 
@@ -368,11 +374,12 @@ def video(
         TimeRemainingColumn,
     )
 
-    from .video import compile_videos
+    from .video import Motion, compile_videos
 
     load_env()
     config = Config.load(config_path)
     book_dir = dir if dir is not None else Path(config.output.dir)
+    motion_cfg = Motion(zoom=zoom, style=motion)
 
     try:
         with Progress(
@@ -396,7 +403,7 @@ def video(
 
             segments, master = compile_videos(
                 book_dir, str(audio), fps=fps, fade=fade, ken_burns=ken_burns,
-                on_log=on_log, on_progress=on_progress,
+                motion=motion_cfg, on_log=on_log, on_progress=on_progress,
             )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Video compilation failed:[/red] {exc}")

@@ -331,11 +331,15 @@ the whole book. Audio may be a single `.m4b` or a folder of `.mp3` parts (each
 segment seeks its window out of the shared timeline). A **progress bar** tracks
 each encode. Run `visualize` first so frames have timestamps; needs `ffmpeg`.
 
-Each still gets a subtle **Ken Burns** slow zoom/pan (alternating in/out) for a
-cinematic feel — disable with `--no-ken-burns` for static holds (if a filter
-quirk ever fails, it falls back to static automatically). Stills are held for
-their full duration (driven by the `fps` filter, so the first image no longer
-flashes), with a gentle fade in/out per segment (`--fade`, default 0.5s).
+Each still gets a subtle **Ken Burns** slow zoom for a cinematic feel — disable
+with `--no-ken-burns` for static holds (if a filter quirk ever fails, it falls
+back to static automatically). The default motion is **crop-safe**: it zooms
+*out* and settles on the full, uncropped frame (`--motion out`), anchored
+slightly high so heads/faces are never clipped. Tune with `--zoom` (max zoom,
+default 1.08; `1.0` = no zoom) and `--motion in|out|alternate`. New frames are
+also prompted with headroom so there's room to move. Stills are held for their
+full duration (`fps` filter, so the first image no longer flashes), with a gentle
+fade in/out per segment (`--fade`, default 0.5s).
 
 **Pacing** is governed by how many scenes the analyzer picks — denser scenes
 mean frames that track the narration more closely; tune
