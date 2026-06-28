@@ -74,7 +74,7 @@ def test_compile_videos_renders_per_segment_and_master(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_render(seg, audio_files, fps, fade, out, on_progress):
+    def fake_render(seg, audio_files, fps, fade, ken_burns, out, on_progress, log):
         calls.append((seg.label, round(seg.start), round(seg.end)))
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"MP4")
@@ -108,6 +108,47 @@ def test_video_filter_uses_fps_and_fade():
     # Fade skipped for very short windows / fade=0.
     assert "fade" not in _video_filter(24, win=1.0, fade=0.5)
     assert "fade" not in _video_filter(24, win=600.0, fade=0.0)
+
+
+def test_cue_durations_window_relative():
+    from audiobook_visualizer.video import _cue_durations
+
+    cues = [FrameCue(Path("a"), 3660.0, 3720.0), FrameCue(Path("b"), 3900.0, 3960.0)]
+    durs = _cue_durations(cues, w_start=3600.0, w_end=7200.0)
+    assert durs == [300.0, 3300.0]  # first 0->300, second 300->window end (3600)
+
+
+def test_ken_burns_filter_alternates_and_zooms():
+    from audiobook_visualizer.video import _ken_burns_vf
+
+    even = _ken_burns_vf(0, frames=240, fps=24, w=1792, h=1024)
+    odd = _ken_burns_vf(1, frames=240, fps=24, w=1792, h=1024)
+    assert "zoompan" in even and "s=1792x1024" in even
+    assert "scale=3584:2048" in even  # upscaled 2x to keep zoompan smooth
+    assert "min(zoom+" in even        # even -> zoom in
+    assert "max(zoom-" in odd         # odd  -> zoom out
+
+
+def test_render_segment_falls_back_when_ken_burns_fails(tmp_path, monkeypatch):
+    from audiobook_visualizer.video import Segment, _render_segment
+
+    seg = Segment(tmp_path, "0000-60min", 0.0, 60.0, [FrameCue(tmp_path / "a.png", 10.0, 20.0)])
+    msgs = []
+
+    def boom(*a, **k):
+        raise RuntimeError("zoompan exploded")
+
+    static_called = {}
+
+    def fake_static(*a, **k):
+        static_called["yes"] = True
+
+    monkeypatch.setattr(video_mod, "_render_kenburns", boom)
+    monkeypatch.setattr(video_mod, "_render_static", fake_static)
+
+    _render_segment(seg, [], 24, 0.5, True, tmp_path / "o.mp4", None, msgs.append)
+    assert static_called.get("yes")  # fell back to static
+    assert any("Ken Burns failed" in m for m in msgs)
 
 
 def test_run_ffmpeg_reports_progress(tmp_path, monkeypatch):
@@ -151,7 +192,7 @@ def test_single_chunk_at_book_dir_is_the_result(tmp_path, monkeypatch):
     monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/a.m4b")])
     monkeypatch.setattr(video_mod, "audio_total_duration", lambda p: 100.0)
-    monkeypatch.setattr(video_mod, "_render_segment", lambda *a: Path(a[4]).write_bytes(b"X"))
+    monkeypatch.setattr(video_mod, "_render_segment", lambda *a: Path(a[5]).write_bytes(b"X"))
 
     segments, master = compile_videos(book, "/a.m4b")
     assert master == segments[0] == book / "video.mp4"

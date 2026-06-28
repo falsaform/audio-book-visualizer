@@ -136,6 +136,7 @@ def compile_videos(
     audio: str | Path,
     fps: int = 24,
     fade: float = 0.5,
+    ken_burns: bool = True,
     on_log: Optional[LogFn] = None,
     on_progress: Optional[ProgressFn] = None,
 ) -> tuple[list[Path], Optional[Path]]:
@@ -163,7 +164,7 @@ def compile_videos(
             f"Segment {seg.label}: {len(seg.cues)} frame(s), "
             f"{_fmt(seg.start)}–{_fmt(seg.end)} ({seg.duration / 60:.1f} min)"
         )
-        _render_segment(seg, audio_files, fps, fade, out, on_progress)
+        _render_segment(seg, audio_files, fps, fade, ken_burns, out, on_progress, log)
         outputs.append(out)
 
     # Master: concat the segment videos. If the only segment already lives at the
@@ -181,10 +182,26 @@ def _render_segment(
     audio_files: list[Path],
     fps: int,
     fade: float,
+    ken_burns: bool,
     out: Path,
     on_progress: Optional[ProgressFn],
+    log: LogFn,
 ) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
+    if ken_burns:
+        try:
+            _render_kenburns(seg, audio_files, fps, fade, out, on_progress)
+            return
+        except Exception as exc:  # noqa: BLE001 - never let a filter quirk break it
+            log(f"  (Ken Burns failed, using static frames: {exc})")
+    _render_static(seg, audio_files, fps, fade, out, on_progress)
+
+
+def _render_static(
+    seg: Segment, audio_files: list[Path], fps: int, fade: float,
+    out: Path, on_progress: Optional[ProgressFn],
+) -> None:
+    """Hold each still for its duration (no motion)."""
     win = seg.duration
     with tempfile.TemporaryDirectory(prefix="abv-video-") as workdir:
         wd = Path(workdir)
@@ -192,7 +209,6 @@ def _render_segment(
         frames_txt.write_text(_frames_concat(seg.cues, seg.start, seg.end), encoding="utf-8")
         audio_txt = wd / "audio.txt"
         audio_txt.write_text(_audio_concat(audio_files), encoding="utf-8")
-
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-progress", "pipe:1", "-nostats",
@@ -200,23 +216,117 @@ def _render_segment(
             "-ss", f"{seg.start:.3f}", "-t", f"{win:.3f}",
             "-f", "concat", "-safe", "0", "-i", str(audio_txt),
             "-map", "0:v", "-map", "1:a",
-            # Drive CFR with the fps filter — this reliably holds each still for
-            # its full duration (a bare -r drops/flashes the first image). A
-            # gentle fade in/out tops-and-tails each segment cinematically.
+            # Drive CFR with the fps filter — reliably holds each still for its
+            # full duration (a bare -r drops/flashes the first image).
             "-vf", _video_filter(fps, win, fade),
-            "-c:v", "libx264",
-            "-c:a", "aac", "-b:a", "192k",
-            "-shortest", "-movflags", "+faststart",
-            str(out),
+            "-c:v", "libx264", "-c:a", "aac", "-b:a", "192k",
+            "-shortest", "-movflags", "+faststart", str(out),
         ]
         _run_ffmpeg(cmd, win, on_progress)
 
 
+def _render_kenburns(
+    seg: Segment, audio_files: list[Path], fps: int, fade: float,
+    out: Path, on_progress: Optional[ProgressFn],
+) -> None:
+    """Slow zoom/pan (Ken Burns) per still, then concat + mux audio."""
+    win = seg.duration
+    durations = _cue_durations(seg.cues, seg.start, seg.end)
+    w, h = _image_size(seg.cues[0].image)
+
+    with tempfile.TemporaryDirectory(prefix="abv-video-") as workdir:
+        wd = Path(workdir)
+        clips: list[Path] = []
+        done = 0.0
+        for i, (cue, dur) in enumerate(zip(seg.cues, durations)):
+            clip = wd / f"clip_{i:05d}.mp4"
+            frames = max(1, round(dur * fps))
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-loop", "1", "-i", str(cue.image),
+                "-vf", _ken_burns_vf(i, frames, fps, w, h),
+                "-frames:v", str(frames), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-an", str(clip),
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+            clips.append(clip)
+            done += dur
+            if on_progress and win:
+                on_progress(min(done, win), win)
+
+        clips_txt = wd / "clips.txt"
+        clips_txt.write_text(
+            "ffconcat version 1.0\n"
+            + "\n".join(f"file '{c.as_posix()}'" for c in clips) + "\n",
+            encoding="utf-8",
+        )
+        audio_txt = wd / "audio.txt"
+        audio_txt.write_text(_audio_concat(audio_files), encoding="utf-8")
+
+        # Concat the motion clips + mux the audio window. Re-encode video only if
+        # fades are requested; otherwise stream-copy (fast).
+        vcodec = ["-c:v", "libx264", "-vf", _fade_filter(win, fade)] if fade > 0 \
+            else ["-c:v", "copy"]
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0", "-i", str(clips_txt),
+            "-ss", f"{seg.start:.3f}", "-t", f"{win:.3f}",
+            "-f", "concat", "-safe", "0", "-i", str(audio_txt),
+            "-map", "0:v", "-map", "1:a", *vcodec,
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest", "-movflags", "+faststart", str(out),
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+
+
 def _video_filter(fps: int, win: float, fade: float) -> str:
     chain = f"fps={fps},format=yuv420p"
+    fadeflt = _fade_filter(win, fade)
+    return f"{chain},{fadeflt}" if fadeflt else chain
+
+
+def _fade_filter(win: float, fade: float) -> str:
     if fade > 0 and win > 2.5 * fade:
-        chain += f",fade=t=in:st=0:d={fade:.3f},fade=t=out:st={win - fade:.3f}:d={fade:.3f}"
-    return chain
+        return f"fade=t=in:st=0:d={fade:.3f},fade=t=out:st={win - fade:.3f}:d={fade:.3f}"
+    return ""
+
+
+def _ken_burns_vf(idx: int, frames: int, fps: int, w: int, h: int) -> str:
+    """A subtle zoom (alternating in/out) for one still. Upscale first to keep
+    zoompan smooth (it works in integer output pixels)."""
+    max_zoom = 1.12
+    inc = (max_zoom - 1.0) / max(1, frames)
+    up_w, up_h = w * 2, h * 2
+    if idx % 2 == 0:  # slow zoom in
+        z = f"min(zoom+{inc:.6f},{max_zoom:.3f})"
+    else:  # slow zoom out (start zoomed, ease back toward 1.0)
+        z = f"if(eq(on,0),{max_zoom:.3f},max(zoom-{inc:.6f},1.0))"
+    return (
+        f"scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
+        f"crop={up_w}:{up_h},"
+        f"zoompan=z='{z}':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"s={w}x{h}:fps={fps},format=yuv420p"
+    )
+
+
+def _cue_durations(cues: list[FrameCue], w_start: float, w_end: float) -> list[float]:
+    win = max(0.0, w_end - w_start)
+    starts = [0.0] + [max(0.0, c.start - w_start) for c in cues[1:]]
+    durs = []
+    for i in range(len(cues)):
+        seg_end = starts[i + 1] if i + 1 < len(cues) else win
+        durs.append(max(0.2, seg_end - starts[i]))
+    return durs
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    try:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            return img.size
+    except Exception:  # noqa: BLE001
+        return 1792, 1024  # widescreen default
 
 
 def _concat_videos(segment_paths: list[Path], out: Path) -> None:

@@ -343,6 +343,9 @@ def video(
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config.yaml."),
     fps: int = typer.Option(24, "--fps", help="Output frame rate."),
     fade: float = typer.Option(0.5, "--fade", help="Fade in/out seconds per segment (0 = off)."),
+    ken_burns: bool = typer.Option(
+        True, "--ken-burns/--no-ken-burns", help="Slow zoom/pan on each still (cinematic)."
+    ),
 ):
     """Compile generated frames + audio into timed videos (mp4).
 
@@ -385,7 +388,7 @@ def video(
                 progress.reset(task)  # new segment -> reset the bar
 
             segments, master = compile_videos(
-                book_dir, str(audio), fps=fps, fade=fade,
+                book_dir, str(audio), fps=fps, fade=fade, ken_burns=ken_burns,
                 on_log=on_log, on_progress=on_progress,
             )
     except Exception as exc:  # noqa: BLE001
