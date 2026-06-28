@@ -134,6 +134,47 @@ def test_ken_burns_alternate_and_no_zoom():
     assert "z='1.0'" in _ken_burns_vf(0, 240, 24, 1792, 1024, Motion(zoom=1.0))
 
 
+def test_camera_move_empty_delegates_to_ken_burns():
+    from audiobook_visualizer.video import Motion, _camera_move_vf, _ken_burns_vf
+
+    m = Motion()
+    # An empty move (legacy content) is byte-for-byte the global Ken Burns.
+    assert _camera_move_vf("", 0, 240, 24, 1792, 1024, m) == _ken_burns_vf(0, 240, 24, 1792, 1024, m)
+
+
+def test_camera_moves_build_expected_motion():
+    from audiobook_visualizer.video import Motion, _camera_move_vf
+
+    m = Motion()
+    push = _camera_move_vf("push_in", 0, 240, 24, 1792, 1024, m)
+    assert "zoompan" in push and "min(1.0+" in push          # zoom grows
+    pull = _camera_move_vf("pull_out", 0, 240, 24, 1792, 1024, m)
+    assert "max(zoom-" in pull                                # zoom shrinks
+    # Pan travels x in opposite directions; tilt travels y.
+    right = _camera_move_vf("pan_right", 0, 240, 24, 1792, 1024, m)
+    left = _camera_move_vf("pan_left", 0, 240, 24, 1792, 1024, m)
+    assert "*(on/239)" in right and "*(1-on/239)" in left
+    tilt = _camera_move_vf("tilt_down", 0, 240, 24, 1792, 1024, m)
+    assert "y='(ih-ih/" in tilt and "*(on/239)" in tilt
+    # track_* is lateral like pan_*.
+    assert "*(on/239)" in _camera_move_vf("track_right", 0, 240, 24, 1792, 1024, m)
+    # static holds the full frame.
+    assert "z='1.0'" in _camera_move_vf("static", 0, 240, 24, 1792, 1024, m)
+    # Unknown move degrades to a static hold, never crashes.
+    assert "z='1.0'" in _camera_move_vf("zoom_dolly_barrel_roll", 0, 240, 24, 1792, 1024, m)
+
+
+def test_fingerprint_includes_camera_move(tmp_path, store_seeder):
+    from audiobook_visualizer.video import Motion, _segment_fingerprint, collect_segments
+
+    book = tmp_path / "m"
+    store_seeder(book, [_seg("0000-60min", 0.0, 3600.0, [("s1", 10.0, 20.0)])])
+    seg = collect_segments(book, total_audio=3600.0)[0]
+    base = _segment_fingerprint(seg, 24, 0.5, True, Motion())
+    seg.cues[0].move = "push_in"
+    assert _segment_fingerprint(seg, 24, 0.5, True, Motion()) != base  # move changes the digest
+
+
 def test_render_segment_falls_back_when_ken_burns_fails(tmp_path, monkeypatch):
     from audiobook_visualizer.video import Segment, _render_segment
 

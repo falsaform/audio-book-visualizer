@@ -40,7 +40,8 @@ def test_synthetic_scene_carries_one_shot_and_links_characters(tmp_path):
     view = store.segment_view(sid)
     assert len(view.shots) == 1
     shot = view.shots[0]
-    assert shot.slug == "s1" and shot.camera_move == "static"
+    # Synthetic shots carry no explicit move -> the video uses the global Ken Burns.
+    assert shot.slug == "s1" and shot.camera_move == ""
     # The "Captain" alias resolves to the canonical character name via the link.
     assert shot.characters_present == ["Ahab"]
     assert (shot.start_time, shot.end_time) == (10.0, 20.0)

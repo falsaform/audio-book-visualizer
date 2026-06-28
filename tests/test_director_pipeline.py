@@ -84,6 +84,11 @@ def test_director_mode_writes_screenplay_and_shots(tmp_path, monkeypatch):
     notes = store.list_continuity_notes(seg_id)
     assert len(notes) == 1 and notes[0].category == "wardrobe"
 
+    # The camera moves reach the video layer's cues (drives per-shot motion).
+    from audiobook_visualizer.video import collect_segments
+    segs = collect_segments(book)
+    assert {c.move for c in segs[0].cues} == {"push_in", "tilt_up"}
+
 
 def test_director_without_structure_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(anmod, "build_llm_client", lambda cfg: FakeClient())

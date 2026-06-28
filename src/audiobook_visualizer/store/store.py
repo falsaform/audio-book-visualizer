@@ -310,7 +310,10 @@ class ProductionStore:
                 s.refresh(row)
                 shot = Shot(
                     segment_id=segment_id, scene_id=int(row.id), order_index=0,
-                    slug=scene.id, shot_type=scene.shot_type, camera_move="static",
+                    slug=scene.id, shot_type=scene.shot_type,
+                    # Empty move => the video uses the global Ken Burns (legacy
+                    # behavior); only director shots carry an explicit camera move.
+                    camera_move="",
                     visual_description=scene.visual_description,
                     start_time=scene.start_time, end_time=scene.end_time,
                 )

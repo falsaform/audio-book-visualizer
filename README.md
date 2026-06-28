@@ -348,6 +348,10 @@ also prompted with headroom so there's room to move. Stills are held for their
 full duration (`fps` filter, so the first image no longer flashes), with a gentle
 fade in/out per segment (`--fade`, default 0.5s).
 
+In **director mode** each shot instead uses the camera move the director chose
+(`push_in`, `pull_out`, `pan_*`, `tilt_*`, `track_*`, `static`); the global Ken
+Burns above is the fallback for shots/scenes with no explicit move.
+
 **Incremental re-runs.** Each segment video stores a fingerprint of its inputs
 (the frame images plus the render settings) alongside it as `video.fingerprint`.
 Re-running `just video` re-renders a segment only when that fingerprint changes —
@@ -390,14 +394,15 @@ just visualize --structure output/swarm/audiobook_structure_0000-60min.json --di
 
 Each shot's exact start/end is pinned in Python (the director only suggests a
 relative weight per shot), so the shots **tile each scene's audio window** and the
-animatic stays in sync with the narration. Scenes, shots and their camera moves
-are persisted to `production.db`. Configure the roster under `crew:` — each role
-has its own `model`, `max_turns` and optional `system_prompt`, and `crew.agent_mode`
-runs each role as an autonomous multi-turn Claude Code agent (needs the `claude`
-CLI) rather than a single structured call. Needs an audiobook structure.
+animatic stays in sync with the narration. When you compile the video, each shot's
+camera move drives its **own motion** — `push_in`/`pull_out` zoom, `pan_*`/`track_*`
+travel sideways, `tilt_*` vertically, `static` holds — instead of one global Ken
+Burns. Scenes, shots and their moves are persisted to `production.db`.
 
-> Camera moves are recorded now; rendering them as per-shot motion in the animatic
-> lands in the next slice (the video still uses the global Ken Burns for the moment).
+Configure the roster under `crew:` — each role has its own `model`, `max_turns`
+and optional `system_prompt`, and `crew.agent_mode` runs each role as an autonomous
+multi-turn Claude Code agent (needs the `claude` CLI) rather than a single
+structured call. Needs an audiobook structure.
 
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:

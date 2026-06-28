@@ -40,6 +40,7 @@ class FrameCue:
     image: Path
     start: float
     end: float
+    move: str = ""  # per-shot camera move (director mode); "" = global Ken Burns
 
 
 @dataclass
@@ -86,7 +87,9 @@ def collect_segments(book_dir: str | Path, total_audio: float = 0.0) -> list[Seg
             img = _resolve_image(frame.image_path, chunk_dir, shot.slug)
             if img is None:
                 continue
-            cues.append(FrameCue(img, shot.start_time, shot.end_time or shot.start_time))
+            cues.append(FrameCue(
+                img, shot.start_time, shot.end_time or shot.start_time, shot.camera_move
+            ))
         if not cues:
             continue
         cues.sort(key=lambda c: c.start)
@@ -197,12 +200,12 @@ def _segment_fingerprint(
     render settings. Stored next to the video as ``video.fingerprint``."""
     h = hashlib.sha256()
     h.update(
-        f"v1|fps={fps}|fade={fade}|kb={ken_burns}|"
+        f"v2|fps={fps}|fade={fade}|kb={ken_burns}|"
         f"zoom={motion.zoom}|style={motion.style}|bias={motion.top_bias}|"
         f"win={seg.start:.3f}-{seg.end:.3f}\n".encode()
     )
     for cue in seg.cues:
-        h.update(f"{cue.image.name}|{cue.start:.3f}|{cue.end:.3f}|".encode())
+        h.update(f"{cue.image.name}|{cue.start:.3f}|{cue.end:.3f}|{cue.move}|".encode())
         try:
             st = cue.image.stat()
             h.update(f"{st.st_size}|{st.st_mtime_ns}\n".encode())
@@ -286,7 +289,7 @@ def _render_kenburns(
             cmd = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                 "-loop", "1", "-i", str(cue.image),
-                "-vf", _ken_burns_vf(i, frames, fps, w, h, motion),
+                "-vf", _camera_move_vf(cue.move, i, frames, fps, w, h, motion),
                 "-frames:v", str(frames), "-c:v", "libx264", "-pix_fmt", "yuv420p",
                 "-an", str(clip),
             ]
@@ -331,6 +334,63 @@ def _fade_filter(win: float, fade: float) -> str:
     if fade > 0 and win > 2.5 * fade:
         return f"fade=t=in:st=0:d={fade:.3f},fade=t=out:st={win - fade:.3f}:d={fade:.3f}"
     return ""
+
+
+def _camera_move_vf(
+    move: str, idx: int, frames: int, fps: int, w: int, h: int, motion: Motion
+) -> str:
+    """An ffmpeg ``zoompan`` filter realising one shot's camera move.
+
+    An empty move (legacy scenes/paragraphs content) delegates to the global
+    :func:`_ken_burns_vf`. Director shots carry an explicit move:
+    ``push_in``/``pull_out`` zoom; ``pan_*``/``track_*`` travel horizontally and
+    ``tilt_*`` vertically at a slight zoom (so there is room to move); ``static``
+    holds the full, uncropped frame.
+    """
+    move = (move or "").strip().lower()
+    if move in ("", "kenburns", "ken_burns"):
+        return _ken_burns_vf(idx, frames, fps, w, h, motion)
+
+    up_w, up_h = w * 2, h * 2
+    dn = max(1, frames - 1)
+    top = motion.top_bias
+    max_zoom = max(1.01, motion.zoom)
+    pz = max(max_zoom, 1.15)  # pan/tilt need crop room to travel within
+    centered_x = "(iw-iw/zoom)/2"
+    biased_y = f"(ih-ih/zoom)*{top:.3f}"
+
+    if move == "push_in":
+        inc = (max_zoom - 1.0) / dn
+        z, x, y = f"min(1.0+{inc:.6f}*on,{max_zoom:.4f})", centered_x, biased_y
+    elif move == "pull_out":
+        inc = (max_zoom - 1.0) / dn
+        z = f"if(eq(on,0),{max_zoom:.4f},max(zoom-{inc:.6f},1.0))"
+        x, y = centered_x, biased_y
+    elif move in ("pan_left", "pan_right", "track_left", "track_right"):
+        rng = f"(iw-iw/{pz:.4f})"
+        moving_right = move.endswith("_right")
+        z = f"{pz:.4f}"
+        x = f"{rng}*(on/{dn})" if moving_right else f"{rng}*(1-on/{dn})"
+        y = f"(ih-ih/{pz:.4f})*{top:.3f}"
+    elif move in ("tilt_up", "tilt_down"):
+        rng = f"(ih-ih/{pz:.4f})"
+        z = f"{pz:.4f}"
+        x = f"(iw-iw/{pz:.4f})/2"
+        y = f"{rng}*(on/{dn})" if move == "tilt_down" else f"{rng}*(1-on/{dn})"
+    else:  # "static" (or anything unexpected): a still hold of the full frame
+        z, x, y = "1.0", centered_x, biased_y
+
+    return _zoompan(up_w, up_h, w, h, frames, fps, z, x, y)
+
+
+def _zoompan(up_w: int, up_h: int, w: int, h: int, frames: int, fps: int,
+             z: str, x: str, y: str) -> str:
+    return (
+        f"scale={up_w}:{up_h}:force_original_aspect_ratio=increase,"
+        f"crop={up_w}:{up_h},"
+        f"zoompan=z='{z}':d={frames}:x='{x}':y='{y}':"
+        f"s={w}x{h}:fps={fps},format=yuv420p"
+    )
 
 
 def _ken_burns_vf(idx: int, frames: int, fps: int, w: int, h: int, motion: Motion) -> str:
