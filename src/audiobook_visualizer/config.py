@@ -26,8 +26,11 @@ class AnalysisConfig(BaseModel):
     # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
     provider: str = "auto"
     model: str = "claude-sonnet-4-6"
-    max_chars_per_chunk: int = 12000
-    scenes_per_chunk: int = 3
+    # Smaller chunks + more scenes => denser frames that track the narration more
+    # closely (a frame every ~30s rather than every minute-plus). Raise/lower to
+    # trade pacing against cost.
+    max_chars_per_chunk: int = 8000
+    scenes_per_chunk: int = 5
     temperature: float = 0.4
 
 

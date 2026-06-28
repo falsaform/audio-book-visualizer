@@ -331,6 +331,13 @@ the whole book. Audio may be a single `.m4b` or a folder of `.mp3` parts (each
 segment seeks its window out of the shared timeline). A **progress bar** tracks
 each encode. Run `visualize` first so frames have timestamps; needs `ffmpeg`.
 
+Each still is held for its full duration (driven by the `fps` filter, so the
+first image no longer flashes), with a gentle fade in/out per segment
+(`--fade`, default 0.5s). **Pacing** is governed by how many scenes the analyzer
+picks — denser scenes mean frames that track the narration more closely; tune
+`analysis.scenes_per_chunk` / `max_chars_per_chunk` (and re-run with
+`--reanalyze` to apply).
+
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:
 

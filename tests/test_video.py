@@ -74,7 +74,7 @@ def test_compile_videos_renders_per_segment_and_master(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_render(seg, audio_files, fps, out, on_progress):
+    def fake_render(seg, audio_files, fps, fade, out, on_progress):
         calls.append((seg.label, round(seg.start), round(seg.end)))
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"MP4")
@@ -95,6 +95,19 @@ def test_compile_videos_renders_per_segment_and_master(tmp_path, monkeypatch):
     assert [p.name for p in segments] == ["video.mp4", "video.mp4"]
     assert master == book / "video.mp4"
     assert concat["paths"] == ["video.mp4", "video.mp4"]
+
+
+def test_video_filter_uses_fps_and_fade():
+    from audiobook_visualizer.video import _video_filter
+
+    # The fps filter (not a bare -r) drives CFR so the first still doesn't flash.
+    vf = _video_filter(24, win=600.0, fade=0.5)
+    assert vf.startswith("fps=24,format=yuv420p")
+    assert "fade=t=in:st=0:d=0.500" in vf
+    assert "fade=t=out:st=599.500:d=0.500" in vf
+    # Fade skipped for very short windows / fade=0.
+    assert "fade" not in _video_filter(24, win=1.0, fade=0.5)
+    assert "fade" not in _video_filter(24, win=600.0, fade=0.0)
 
 
 def test_run_ffmpeg_reports_progress(tmp_path, monkeypatch):
@@ -138,7 +151,7 @@ def test_single_chunk_at_book_dir_is_the_result(tmp_path, monkeypatch):
     monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/a.m4b")])
     monkeypatch.setattr(video_mod, "audio_total_duration", lambda p: 100.0)
-    monkeypatch.setattr(video_mod, "_render_segment", lambda *a: Path(a[3]).write_bytes(b"X"))
+    monkeypatch.setattr(video_mod, "_render_segment", lambda *a: Path(a[4]).write_bytes(b"X"))
 
     segments, master = compile_videos(book, "/a.m4b")
     assert master == segments[0] == book / "video.mp4"

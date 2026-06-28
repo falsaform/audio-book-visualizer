@@ -342,6 +342,7 @@ def video(
     ),
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config.yaml."),
     fps: int = typer.Option(24, "--fps", help="Output frame rate."),
+    fade: float = typer.Option(0.5, "--fade", help="Fade in/out seconds per segment (0 = off)."),
 ):
     """Compile generated frames + audio into timed videos (mp4).
 
@@ -384,7 +385,8 @@ def video(
                 progress.reset(task)  # new segment -> reset the bar
 
             segments, master = compile_videos(
-                book_dir, str(audio), fps=fps, on_log=on_log, on_progress=on_progress
+                book_dir, str(audio), fps=fps, fade=fade,
+                on_log=on_log, on_progress=on_progress,
             )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Video compilation failed:[/red] {exc}")

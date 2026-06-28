@@ -13,8 +13,10 @@ analysis:
   # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
   provider: auto
   model: claude-sonnet-4-6        # text analysis model (characters/scenes)
-  max_chars_per_chunk: 12000      # how much book text per analysis request
-  scenes_per_chunk: 3             # target number of still-frame moments per chunk
+  # Smaller chunks + more scenes => denser frames that track the narration
+  # (a frame every ~30s). Raise/lower to trade pacing against cost.
+  max_chars_per_chunk: 8000       # how much book text per analysis request
+  scenes_per_chunk: 5             # target number of still-frame moments per chunk
   temperature: 0.4
 
 audio:

@@ -135,6 +135,7 @@ def compile_videos(
     book_dir: str | Path,
     audio: str | Path,
     fps: int = 24,
+    fade: float = 0.5,
     on_log: Optional[LogFn] = None,
     on_progress: Optional[ProgressFn] = None,
 ) -> tuple[list[Path], Optional[Path]]:
@@ -162,7 +163,7 @@ def compile_videos(
             f"Segment {seg.label}: {len(seg.cues)} frame(s), "
             f"{_fmt(seg.start)}–{_fmt(seg.end)} ({seg.duration / 60:.1f} min)"
         )
-        _render_segment(seg, audio_files, fps, out, on_progress)
+        _render_segment(seg, audio_files, fps, fade, out, on_progress)
         outputs.append(out)
 
     # Master: concat the segment videos. If the only segment already lives at the
@@ -176,7 +177,12 @@ def compile_videos(
 
 
 def _render_segment(
-    seg: Segment, audio_files: list[Path], fps: int, out: Path, on_progress: Optional[ProgressFn]
+    seg: Segment,
+    audio_files: list[Path],
+    fps: int,
+    fade: float,
+    out: Path,
+    on_progress: Optional[ProgressFn],
 ) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     win = seg.duration
@@ -194,12 +200,23 @@ def _render_segment(
             "-ss", f"{seg.start:.3f}", "-t", f"{win:.3f}",
             "-f", "concat", "-safe", "0", "-i", str(audio_txt),
             "-map", "0:v", "-map", "1:a",
-            "-r", str(fps), "-pix_fmt", "yuv420p", "-c:v", "libx264",
+            # Drive CFR with the fps filter — this reliably holds each still for
+            # its full duration (a bare -r drops/flashes the first image). A
+            # gentle fade in/out tops-and-tails each segment cinematically.
+            "-vf", _video_filter(fps, win, fade),
+            "-c:v", "libx264",
             "-c:a", "aac", "-b:a", "192k",
             "-shortest", "-movflags", "+faststart",
             str(out),
         ]
         _run_ffmpeg(cmd, win, on_progress)
+
+
+def _video_filter(fps: int, win: float, fade: float) -> str:
+    chain = f"fps={fps},format=yuv420p"
+    if fade > 0 and win > 2.5 * fade:
+        chain += f",fade=t=in:st=0:d={fade:.3f},fade=t=out:st={win - fade:.3f}:d={fade:.3f}"
+    return chain
 
 
 def _concat_videos(segment_paths: list[Path], out: Path) -> None:
