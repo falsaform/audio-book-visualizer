@@ -9,7 +9,6 @@ one frame doesn't abort the rest.
 
 from __future__ import annotations
 
-import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -35,10 +34,12 @@ from .models import (
     Scene,
     Transcript,
 )
+from .store import ProductionStore
 
 ProgressFn = Callable[[str], None]
 
-_CHARACTERS_FILE = "characters.json"
+_WINDOW_RE = re.compile(r"(\d+)-(\d+)min")
+_WINDOW_END_RE = re.compile(r"(\d+)-endmin")
 
 
 def _slug(name: str) -> str:
@@ -52,22 +53,27 @@ def _chunk_label(structure_path: str) -> str:
     return label or "full"
 
 
-def _load_characters(book_dir: Path) -> list[Character]:
-    """Load the accumulated character bible shared across chunks (if any)."""
-    path = book_dir / _CHARACTERS_FILE
-    if not path.exists():
-        return []
-    try:
-        return [Character.model_validate(c) for c in json.loads(path.read_text())]
-    except (json.JSONDecodeError, OSError, ValueError):
-        return []
+def _source_label(ebook_path, audio_path, structure_path) -> str:
+    has_text = bool(ebook_path)
+    has_audio = bool(audio_path or structure_path)
+    if has_text and has_audio:
+        return "both"
+    if has_audio:
+        return "audiobook"
+    return "ebook"
 
 
-def _save_characters(book_dir: Path, characters: list[Character]) -> None:
-    book_dir.mkdir(parents=True, exist_ok=True)
-    (book_dir / _CHARACTERS_FILE).write_text(
-        json.dumps([c.model_dump() for c in characters], indent=2), encoding="utf-8"
-    )
+def _segment_window(chunk_label: str, scenes: list[Scene]) -> tuple[float, float]:
+    """The segment's audio window. Encoded in the chunk label (e.g. ``0000-60min``)
+    when present; otherwise the span the timestamped scenes cover."""
+    if m := _WINDOW_RE.search(chunk_label):
+        return float(m.group(1)) * 60.0, float(m.group(2)) * 60.0
+    ends = [s.end_time for s in scenes if s.end_time is not None]
+    if m := _WINDOW_END_RE.search(chunk_label):
+        start = float(m.group(1)) * 60.0
+        return start, (max(ends) if ends else start)
+    starts = [s.start_time for s in scenes if s.start_time is not None]
+    return (min(starts) if starts else 0.0), (max(ends) if ends else 0.0)
 
 
 def _scene_references(
@@ -236,14 +242,22 @@ class Pipeline:
         self,
         analysis: BookAnalysis,
         out_dir: Path,
+        store: Optional[ProductionStore] = None,
+        production_id: Optional[int] = None,
+        segment_id: Optional[int] = None,
         book_dir: Optional[Path] = None,
         dry_run: bool = False,
         force: bool = False,
     ) -> list[Frame]:
         # Portraits (and the character bible) are shared at the book level so
         # they're cached/reused across separately-rendered chunks; frames are
-        # per-chunk under out_dir.
+        # per-chunk under out_dir and persisted to the production DB.
         book_dir = Path(book_dir) if book_dir is not None else Path(out_dir)
+        out_dir = Path(out_dir)
+        if store is None:
+            # Standalone use: provision the production/segment from the analysis so
+            # callers can render straight from a BookAnalysis. run() passes its own.
+            store, production_id, segment_id = self._provision(analysis, out_dir, book_dir)
         gen_cfg = self.config.generation
         provider = get_provider(gen_cfg, dry_run=dry_run)
         frames_dir = out_dir / "frames"
@@ -258,7 +272,9 @@ class Pipeline:
         portraits: dict[str, Path] = {}
         if gen_cfg.character_portraits and provider.supports_references:
             needed = {m.lower() for s in scenes for m in s.characters_present}
-            portraits = self._generate_portraits(analysis, provider, book_dir, force, needed)
+            portraits = self._generate_portraits(
+                analysis, provider, book_dir, force, needed, store, production_id
+            )
 
         self._progress(
             f"Generating {len(scenes)} frame(s) via "
@@ -283,7 +299,8 @@ class Pipeline:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_map = {
                 pool.submit(
-                    self._render_one, provider, scene, prompt, refs, frames_dir, force
+                    self._render_one, provider, scene, prompt, refs, frames_dir,
+                    force, store, segment_id,
                 ): scene
                 for scene, prompt, refs in jobs
             }
@@ -305,8 +322,31 @@ class Pipeline:
         frames.sort(key=lambda f: order.get(f.scene_id, 1_000_000))
         return frames
 
+    def _provision(
+        self, analysis: BookAnalysis, out_dir: Path, book_dir: Path
+    ) -> tuple[ProductionStore, int, int]:
+        """Open the book's store and ensure a segment with this analysis' shots.
+
+        Used when :meth:`generate` is called without an explicit store (standalone
+        rendering). Scenes are only (re)persisted when the segment has none yet, so
+        re-rendering the same analysis reuses cached frames instead of wiping them.
+        """
+        store = ProductionStore.open(book_dir)
+        production_id = store.get_or_create_production(
+            title=analysis.title, author=analysis.author, style=self.config.project.style
+        )
+        chunk_label = out_dir.name if out_dir != book_dir else "full"
+        segment_id = store.find_segment(production_id, chunk_label)
+        if segment_id is None or not store.has_shots(segment_id):
+            store.upsert_characters(production_id, analysis.characters)
+            start, end = _segment_window(chunk_label, analysis.scenes)
+            segment_id = store.get_or_create_segment(production_id, chunk_label, start, end)
+            store.persist_scenes_as_shots(production_id, segment_id, analysis.scenes)
+        return store, production_id, segment_id
+
     def _generate_portraits(
-        self, analysis: BookAnalysis, provider, book_dir: Path, force: bool, needed: set[str]
+        self, analysis: BookAnalysis, provider, book_dir: Path, force: bool, needed: set[str],
+        store: Optional[ProductionStore] = None, production_id: Optional[int] = None,
     ) -> dict[str, Path]:
         """Render one reference portrait per described character that appears.
 
@@ -347,11 +387,12 @@ class Pipeline:
                     pass  # reuse the existing portrait
                 else:
                     provider.generate(prompt, path, size=portrait_size)
-                    cache.write_sidecar(path, key, {"character": char.name})
                 # Map canonical name and aliases to the portrait.
                 out[char.name.lower()] = path
                 for alias in char.aliases:
                     out[alias.lower()] = path
+                if store is not None and production_id is not None:
+                    store.set_portrait(production_id, char.name, str(path), key)
             except Exception as exc:  # noqa: BLE001 - a missing portrait isn't fatal
                 self._progress(f"  (portrait failed for {char.name}: {exc})")
         return out
@@ -360,12 +401,15 @@ class Pipeline:
         self,
         analysis: BookAnalysis,
         out_dir: Path,
+        store: ProductionStore,
+        production_id: int,
+        segment_id: int,
         scene_id: str,
         prompt_override: Optional[str] = None,
         style_override: Optional[str] = None,
         dry_run: bool = False,
     ) -> Frame:
-        """Render a single scene's frame (used by the web UI). Always force.
+        """Render a single shot's frame (used by the web UI). Always force.
 
         ``prompt_override`` lets the UI hand-edit the prompt; ``style_override``
         swaps the visual style for this one frame.
@@ -383,7 +427,9 @@ class Pipeline:
         portraits: dict[str, Path] = {}
         if gen_cfg.character_portraits and provider.supports_references:
             needed = {m.lower() for m in scene.characters_present}
-            portraits = self._generate_portraits(analysis, provider, out_dir, False, needed)
+            portraits = self._generate_portraits(
+                analysis, provider, out_dir, False, needed, store, production_id
+            )
 
         use_refs = provider.supports_references and bool(portraits)
         style = style_override if style_override is not None else self.config.project.style
@@ -396,10 +442,13 @@ class Pipeline:
             )
         refs = _scene_references(scene, analysis, portraits) if use_refs else []
         # force=True: a manual regenerate should always produce a fresh image.
-        return self._render_one(provider, scene, prompt, refs, frames_dir, force=True)
+        return self._render_one(
+            provider, scene, prompt, refs, frames_dir, True, store, segment_id
+        )
 
     def _render_one(
-        self, provider, scene, prompt: str, refs: list[Path], frames_dir: Path, force: bool
+        self, provider, scene, prompt: str, refs: list[Path], frames_dir: Path, force: bool,
+        store: ProductionStore, segment_id: int,
     ) -> Frame:
         frame = Frame(
             scene_id=scene.id,
@@ -408,23 +457,25 @@ class Pipeline:
             model=provider.model,
             references=[str(r) for r in refs],
         )
-        out_path = (frames_dir / scene.id).with_suffix(".png")
+        key = cache.compute_key(
+            {"prompt": prompt, "provider": provider.name, "model": provider.model}
+        )
         try:
-            # Existence-based: keep an existing frame; delete it to regenerate
-            # (or pass --force). Lets you hand-edit analysis.json, delete the
-            # frames you want redone, and re-run to rebuild only those.
-            if self.config.generation.cache and not force and out_path.exists():
-                frame.image_path = str(out_path)
-                frame.cached = True
-                return frame
+            # DB-driven cache: reuse only when a Frame row exists, its image is on
+            # disk, AND the recomputed key matches — stronger than a bare file check.
+            # Delete the image (or pass --force) to regenerate.
+            if self.config.generation.cache and not force:
+                cached = store.frame_cache(segment_id, scene.id)
+                if cached and cached[0] and Path(cached[0]).exists() and cached[1] == key:
+                    frame.image_path = cached[0]
+                    frame.cached = True
+                    store.upsert_frame(segment_id, frame, key)
+                    return frame
             path = provider.generate(prompt, frames_dir / scene.id, references=refs)
             frame.image_path = str(path)
-            key = cache.compute_key(
-                {"prompt": prompt, "provider": provider.name, "model": provider.model}
-            )
-            cache.write_sidecar(path, key, {"prompt": prompt})
         except Exception as exc:  # noqa: BLE001 - one frame failing shouldn't abort
             frame.error = str(exc)
+        store.upsert_frame(segment_id, frame, key)
         return frame
 
     # -- full run -----------------------------------------------------------
@@ -439,22 +490,26 @@ class Pipeline:
         force: bool = False,
         reanalyze: bool = False,
     ) -> BookAnalysis:
-        # book_dir holds shared, accumulating state (character bible + portraits);
-        # out_dir is per-chunk (analysis, frames, manifest, gallery) so separately
-        # rendered chunks don't overwrite each other.
+        # book_dir holds the production database (the source of truth: characters,
+        # scenes, shots, frames) + shared portraits; out_dir is the per-chunk folder
+        # where frame images and the compiled video live, so separately rendered
+        # chunks don't overwrite each other.
         book_dir = Path(self.config.output.dir)
-        chunk_label = _chunk_label(structure_path) if structure_path else None
-        out_dir = (book_dir / chunk_label) if chunk_label else book_dir
+        chunk_label = _chunk_label(structure_path) if structure_path else "full"
+        out_dir = (book_dir / chunk_label) if chunk_label != "full" else book_dir
         book_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
-        analysis_path = out_dir / "analysis.json"
 
-        # Skip (re)analysis if it's already been done — reuse the existing (and
-        # possibly hand-edited) analysis.json and go straight to generation.
-        if analysis_path.exists() and not reanalyze:
-            self._progress(f"Reusing existing analysis -> {analysis_path}")
+        store = ProductionStore.open(book_dir)
+        production_id = store.get_or_create_production(style=self.config.project.style)
+        segment_id = store.find_segment(production_id, chunk_label)
+
+        # Skip (re)analysis if this segment already has shots — reuse what's in the
+        # production DB and go straight to generation.
+        if segment_id is not None and store.has_shots(segment_id) and not reanalyze:
+            self._progress(f"Reusing existing analysis for segment '{chunk_label}' (production.db)")
             self._progress("  (pass --reanalyze to regenerate it from the source)")
-            analysis = BookAnalysis.model_validate_json(analysis_path.read_text())
+            analysis = store.load_segment_analysis(production_id, segment_id)
         else:
             ingested = self.ingest(ebook_path, audio_path, structure_path)
 
@@ -467,35 +522,46 @@ class Pipeline:
                 self._progress(f"Wrote audiobook structure -> {structure_out}")
 
             # Continuity: seed analysis with the accumulated character bible.
-            known = _load_characters(book_dir)
+            known = store.list_characters(production_id)
             analysis = self.analyze(
                 ingested.chapters,
                 ingested.title,
                 ingested.author,
                 ingested.transcript,
                 ingested.structure,
-                id_prefix=chunk_label or "scene",
+                id_prefix=chunk_label if chunk_label != "full" else "scene",
                 known_characters=known,
             )
 
-            # Persist per-chunk analysis and update the shared character bible.
-            analysis_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
-            self._progress(f"Wrote analysis -> {analysis_path}")
-            _save_characters(book_dir, analysis.characters)
+            # Backfill production metadata now that we know it.
+            store.get_or_create_production(
+                title=ingested.title or analysis.title,
+                author=ingested.author or analysis.author,
+                source=_source_label(ebook_path, audio_path, structure_path),
+                style=self.config.project.style,
+            )
+            # Persist: update the shared bible, create/refresh the segment, and store
+            # the analyzed scenes as shots (synthetic screenplay scenes in legacy modes).
+            store.upsert_characters(production_id, analysis.characters)
+            start, end = _segment_window(chunk_label, analysis.scenes)
+            segment_id = store.get_or_create_segment(
+                production_id, chunk_label, start, end, structure_path
+            )
+            store.persist_scenes_as_shots(production_id, segment_id, analysis.scenes)
+            self._progress(f"Persisted {len(analysis.scenes)} shot(s) to production.db")
+            # Reload so characters_present are canonicalised against the bible.
+            analysis = store.load_segment_analysis(production_id, segment_id)
 
         if analyze_only:
             return analysis
 
-        frames = self.generate(analysis, out_dir, book_dir=book_dir, dry_run=dry_run, force=force)
-
-        manifest_path = out_dir / "manifest.json"
-        manifest_path.write_text(
-            json.dumps([f.model_dump() for f in frames], indent=2), encoding="utf-8"
+        self.generate(
+            analysis, out_dir, store=store, production_id=production_id,
+            segment_id=segment_id, book_dir=book_dir, dry_run=dry_run, force=force,
         )
-        self._progress(f"Wrote manifest -> {manifest_path}")
 
         if self.config.output.gallery:
-            gallery_path = render_gallery(analysis, frames, out_dir)
+            gallery_path = render_gallery(store.production_view(production_id), out_dir)
             self._progress(f"Wrote gallery -> {gallery_path}")
 
         return analysis

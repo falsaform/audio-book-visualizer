@@ -1,6 +1,5 @@
 """Tests for the web UI server (offline: stub provider via dry_run)."""
 
-import json
 from pathlib import Path
 
 import pytest
@@ -9,25 +8,26 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from audiobook_visualizer.config import Config  # noqa: E402
-from audiobook_visualizer.models import BookAnalysis, Character, Scene  # noqa: E402
+from audiobook_visualizer.models import Character  # noqa: E402
+from audiobook_visualizer.store import ProductionStore  # noqa: E402
 from audiobook_visualizer.web.server import create_app  # noqa: E402
 
 
-def _write_analysis(out_dir: Path) -> BookAnalysis:
-    analysis = BookAnalysis(
-        title="Test Book",
-        author="Anon",
+def _seed(seeder, out_dir: Path) -> None:
+    seeder(
+        out_dir,
+        [{
+            "label": "full", "start": 0.0, "end": 0.0,
+            "scenes": [
+                {"slug": "scene_001_00", "title": "Harbor", "chapter": "Chapter 1",
+                 "desc": "grey harbor at dawn"},
+                {"slug": "scene_002_00", "title": "On deck", "desc": "captain at the helm",
+                 "characters": ["Ahab"]},
+            ],
+        }],
+        title="Test Book", author="Anon",
         characters=[Character(name="Ahab", description="grizzled captain, white scar")],
-        scenes=[
-            Scene(id="scene_001_00", title="Harbor", chapter="Chapter 1",
-                  visual_description="grey harbor at dawn", shot_type="wide shot"),
-            Scene(id="scene_002_00", title="On deck", visual_description="captain at the helm",
-                  characters_present=["Ahab"]),
-        ],
     )
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "analysis.json").write_text(analysis.model_dump_json(indent=2))
-    return analysis
 
 
 def _client(out_dir: Path) -> TestClient:
@@ -36,16 +36,16 @@ def _client(out_dir: Path) -> TestClient:
     return TestClient(create_app(out_dir, cfg, dry_run=True))
 
 
-def test_index_serves_html(tmp_path: Path):
-    _write_analysis(tmp_path)
+def test_index_serves_html(tmp_path: Path, store_seeder):
+    _seed(store_seeder, tmp_path)
     res = _client(tmp_path).get("/")
     assert res.status_code == 200
     assert "Audiobook Visualizer" in res.text
     assert "/api/state" in res.text  # the SPA wires to the API
 
 
-def test_state_lists_scenes(tmp_path: Path):
-    _write_analysis(tmp_path)
+def test_state_lists_scenes(tmp_path: Path, store_seeder):
+    _seed(store_seeder, tmp_path)
     data = _client(tmp_path).get("/api/state").json()
     assert data["title"] == "Test Book"
     assert data["provider"] == "stub (dry-run)"
@@ -54,13 +54,13 @@ def test_state_lists_scenes(tmp_path: Path):
 
 
 def test_state_requires_analysis(tmp_path: Path):
-    # No analysis.json written.
+    # No production seeded.
     res = _client(tmp_path).get("/api/state")
     assert res.status_code == 404
 
 
-def test_regenerate_creates_frame_and_updates_manifest(tmp_path: Path):
-    _write_analysis(tmp_path)
+def test_regenerate_creates_frame_and_persists(tmp_path: Path, store_seeder):
+    _seed(store_seeder, tmp_path)
     client = _client(tmp_path)
 
     res = client.post("/api/scenes/scene_001_00/regenerate", json={})
@@ -69,9 +69,12 @@ def test_regenerate_creates_frame_and_updates_manifest(tmp_path: Path):
     assert payload["image_url"] and payload["image_url"].startswith("/frames/scene_001_00.png")
     assert (tmp_path / "frames" / "scene_001_00.png").exists()
 
-    # Manifest persisted with the new frame.
-    manifest = json.loads((tmp_path / "manifest.json").read_text())
-    assert manifest[0]["scene_id"] == "scene_001_00"
+    # Frame persisted to the production store.
+    store = ProductionStore.open(tmp_path)
+    pid = store.get_production_id()
+    seg_id = store.find_segment(pid, "full")
+    frame = store.get_frame(seg_id, "scene_001_00")
+    assert frame is not None and frame.image_path is not None
 
     # And it now shows up in state with an image URL.
     state = client.get("/api/state").json()
@@ -79,8 +82,8 @@ def test_regenerate_creates_frame_and_updates_manifest(tmp_path: Path):
     assert first["image_url"] is not None
 
 
-def test_regenerate_honors_prompt_override(tmp_path: Path):
-    _write_analysis(tmp_path)
+def test_regenerate_honors_prompt_override(tmp_path: Path, store_seeder):
+    _seed(store_seeder, tmp_path)
     client = _client(tmp_path)
     res = client.post(
         "/api/scenes/scene_002_00/regenerate",
@@ -90,7 +93,7 @@ def test_regenerate_honors_prompt_override(tmp_path: Path):
     assert res.json()["frame"]["prompt"] == "a totally custom prompt"
 
 
-def test_regenerate_unknown_scene_404(tmp_path: Path):
-    _write_analysis(tmp_path)
+def test_regenerate_unknown_scene_404(tmp_path: Path, store_seeder):
+    _seed(store_seeder, tmp_path)
     res = _client(tmp_path).post("/api/scenes/nope/regenerate", json={})
     assert res.status_code == 404

@@ -9,7 +9,6 @@ Run ``abv --help`` for all options.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
@@ -101,7 +100,7 @@ def visualize(
         False, "--force", help="Regenerate all frames (and portraits), even if they exist."
     ),
     reanalyze: bool = typer.Option(
-        False, "--reanalyze", help="Re-run analysis even if analysis.json already exists."
+        False, "--reanalyze", help="Re-run analysis even if this segment is already in the store."
     ),
     per_paragraph: bool = typer.Option(
         False,
@@ -111,9 +110,10 @@ def visualize(
 ):
     """Run the full pipeline: ingest -> analyze -> generate frames -> gallery.
 
-    If a chunk's analysis.json already exists it is reused (skip re-analysis);
-    pass --reanalyze to regenerate it. Frames/portraits are kept if their file
-    exists — delete the ones you want redone (or use --force) and re-run.
+    Analysis and frames are persisted to a per-book ``production.db``. If this
+    segment was already analyzed it is reused (skip re-analysis); pass --reanalyze
+    to regenerate it. A frame is kept while its image file exists — delete the ones
+    you want redone (or use --force) and re-run.
     """
     load_env()
     config = Config.load(config_path)
@@ -466,19 +466,28 @@ def _transcribe_with_progress(
 
 @app.command()
 def characters(
-    analysis_json: Path = typer.Argument(..., help="Path to a generated analysis.json."),
+    out_dir: Path = typer.Argument(
+        Path("output"), help="Book output dir containing production.db."
+    ),
 ):
-    """Print the character bible from a previous analysis."""
-    from .models import BookAnalysis
+    """Print the character bible from a previous run's production store."""
+    from .store import ProductionStore
 
-    data = json.loads(Path(analysis_json).read_text())
-    analysis = BookAnalysis.model_validate(data)
+    book_dir = out_dir
+    if not (book_dir / "production.db").exists() and (book_dir.parent / "production.db").exists():
+        book_dir = book_dir.parent
+    store = ProductionStore.open(book_dir)
+    pid = store.get_production_id()
+    view = store.production_view(pid) if pid else None
+    if view is None:
+        console.print(f"[red]No production found in {book_dir}.[/red]")
+        raise typer.Exit(code=1)
 
-    table = Table(title=f"Characters — {analysis.title or 'Untitled'}")
+    table = Table(title=f"Characters — {view.title or 'Untitled'}")
     table.add_column("Name", style="bold cyan")
     table.add_column("Role")
     table.add_column("Appearance")
-    for char in analysis.characters:
+    for char in view.characters:
         name = char.name + (f"\n[dim]({', '.join(char.aliases)})[/dim]" if char.aliases else "")
         table.add_row(name, char.role, char.description)
     console.print(table)
@@ -493,25 +502,36 @@ def _summary(analysis, out_dir: str) -> None:
         f"  {len(analysis.characters)} characters · {len(analysis.scenes)} scenes"
     )
 
-    # Report frame outcomes from the manifest, if generation ran.
-    manifest = Path(out_dir) / "manifest.json"
-    if manifest.exists():
-        try:
-            frames = json.loads(manifest.read_text())
-        except (json.JSONDecodeError, OSError):
-            frames = []
-        ok = [f for f in frames if f.get("image_path") and not f.get("error")]
-        failed = [f for f in frames if f.get("error")]
+    # Report frame outcomes from the production store, scoped to this run's scenes.
+    frames = _frame_outcomes(out_dir, {s.id for s in analysis.scenes})
+    if frames:
+        ok = [f for f in frames if f.ok]
+        failed = [f for f in frames if f.error]
         console.print(f"  {len(ok)}/{len(frames)} frames generated")
         if failed:
             console.print(f"  [yellow]⚠ {len(failed)} frame(s) failed.[/yellow]")
-            first = failed[0]["error"].splitlines()[0][:200]
+            first = (failed[0].error or "").splitlines()[0][:200]
             console.print(f"    [dim]{first}[/dim]")
 
     console.print(f"  Output: [underline]{out_dir}[/underline]")
     gallery = Path(out_dir) / "gallery.html"
     if gallery.exists():
         console.print(f"  Open: [underline]{gallery}[/underline]")
+
+
+def _frame_outcomes(out_dir: str, slugs: set[str]) -> list:
+    """Frame DTOs for the given shot slugs, read from the production store."""
+    from .store import ProductionStore
+
+    try:
+        store = ProductionStore.open(Path(out_dir))
+        pid = store.get_production_id()
+        view = store.production_view(pid) if pid else None
+    except Exception:  # noqa: BLE001 - a summary should never crash the run
+        return []
+    if view is None:
+        return []
+    return [s.frame for s in view.shots if s.frame is not None and s.slug in slugs]
 
 
 if __name__ == "__main__":

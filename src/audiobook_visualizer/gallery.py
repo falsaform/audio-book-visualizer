@@ -1,11 +1,11 @@
-"""Render a browsable HTML gallery of generated frames."""
+"""Render a browsable HTML gallery of generated frames (from the production store)."""
 
 from __future__ import annotations
 
 import html
 from pathlib import Path
 
-from .models import BookAnalysis, Frame
+from .store import ProductionView
 
 
 def _fmt_time(seconds: float | None) -> str:
@@ -16,22 +16,22 @@ def _fmt_time(seconds: float | None) -> str:
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
 
 
-def render_gallery(
-    analysis: BookAnalysis, frames: list[Frame], out_dir: Path
-) -> Path:
+def render_gallery(view: ProductionView | None, out_dir: Path) -> Path:
     out_dir = Path(out_dir)
-    scenes_by_id = {s.id: s for s in analysis.scenes}
+    shots = view.shots if view else []
 
     cards = []
-    for frame in frames:
-        scene = scenes_by_id.get(frame.scene_id)
-        title = html.escape(scene.title if scene else frame.scene_id)
-        summary = html.escape(scene.summary if scene else "")
-        chapter = html.escape(scene.chapter or "") if scene else ""
-        ts = _fmt_time(scene.start_time) if scene else ""
+    ok_count = 0
+    for shot in shots:
+        frame = shot.frame
+        title = html.escape(shot.title or shot.slug)
+        summary = html.escape(shot.summary or shot.visual_description)
+        chapter = html.escape(shot.chapter or "")
+        ts = _fmt_time(shot.start_time)
         meta_bits = " · ".join(b for b in [chapter, ts] if b)
 
-        if frame.ok and frame.image_path:
+        if frame and frame.ok and frame.image_path:
+            ok_count += 1
             rel = Path(frame.image_path)
             try:
                 rel = rel.relative_to(out_dir)
@@ -39,7 +39,7 @@ def render_gallery(
                 rel = Path(frame.image_path).name
             media = f'<img loading="lazy" src="{html.escape(str(rel))}" alt="{title}">'
         else:
-            err = html.escape(frame.error or "not generated")
+            err = html.escape((frame.error if frame else None) or "not generated")
             media = f'<div class="missing">⚠ {err}</div>'
 
         cards.append(
@@ -54,13 +54,13 @@ def render_gallery(
         </figure>"""
         )
 
-    book_title = html.escape(analysis.title or "Audiobook Visualizer")
-    author = html.escape(analysis.author or "")
+    book_title = html.escape((view.title if view else "") or "Audiobook Visualizer")
+    author = html.escape(view.author if view else "")
     doc = _TEMPLATE.format(
         title=book_title,
         author=f" — {author}" if author else "",
-        count=len([f for f in frames if f.ok]),
-        total=len(frames),
+        count=ok_count,
+        total=len(shots),
         cards="\n".join(cards),
     )
     out_path = out_dir / "gallery.html"

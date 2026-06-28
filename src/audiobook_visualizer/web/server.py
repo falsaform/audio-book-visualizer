@@ -1,23 +1,24 @@
 """FastAPI app for browsing and regenerating frames.
 
-The server operates on an existing output directory (from a prior ``abv
-visualize``/``--analyze-only`` run): it reads ``analysis.json`` and
-``manifest.json``, serves the images, and exposes a regenerate endpoint that
-re-renders a single scene through the pipeline (with an optional hand-edited
-prompt or style) and updates the manifest.
+The server operates on an output directory from a prior ``abv visualize`` run.
+The production database (``production.db``) lives at the *book* level; if the dir
+it is pointed at is a per-chunk subfolder, the book dir is its parent. It shows
+that segment's shots, serves the images, and exposes a regenerate endpoint that
+re-renders a single shot through the pipeline (optionally with a hand-edited
+prompt or style) and persists the result to the store.
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel
 
 from ..config import Config
-from ..models import BookAnalysis, Frame
+from ..models import Frame
 from ..pipeline import Pipeline
+from ..store import ProductionStore
 from .page import INDEX_HTML
 
 
@@ -26,6 +27,15 @@ class RegenerateRequest(BaseModel):
     # annotation as a request body under `from __future__ import annotations`.
     prompt: Optional[str] = None
     style: Optional[str] = None
+
+
+def _resolve_book_dir(out_dir: Path) -> tuple[Path, str]:
+    """Return ``(book_dir, chunk_label)`` for the dir the server was pointed at."""
+    if (out_dir / "production.db").exists():
+        return out_dir, "full"
+    if (out_dir.parent / "production.db").exists():
+        return out_dir.parent, out_dir.name
+    return out_dir, "full"  # no DB yet; routes will report an empty production
 
 
 def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bool = False):
@@ -37,8 +47,11 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
     config = config or Config.load()
     pipeline = Pipeline(config)
 
+    book_dir, chunk_label = _resolve_book_dir(out_dir)
+    store = ProductionStore.open(book_dir)
+
     frames_dir = out_dir / "frames"
-    portraits_dir = out_dir / "portraits"
+    portraits_dir = book_dir / "portraits"
     frames_dir.mkdir(parents=True, exist_ok=True)
     portraits_dir.mkdir(parents=True, exist_ok=True)
 
@@ -48,52 +61,38 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
 
     # -- helpers ------------------------------------------------------------
 
-    def load_analysis() -> BookAnalysis:
-        path = out_dir / "analysis.json"
-        if not path.exists():
-            raise HTTPException(
-                404,
-                "No analysis.json in the output dir. Run "
-                "`abv visualize --analyze-only` (or a full run) first.",
-            )
-        return BookAnalysis.model_validate_json(path.read_text())
+    def _ids() -> tuple[int, int]:
+        pid = store.get_production_id()
+        if pid is None:
+            raise HTTPException(404, "No production found. Run `abv visualize` first.")
+        seg_id = store.find_segment(pid, chunk_label)
+        if seg_id is None:
+            raise HTTPException(404, f"No segment '{chunk_label}' in the production.")
+        return pid, seg_id
 
-    def load_manifest() -> dict[str, dict]:
-        path = out_dir / "manifest.json"
-        if not path.exists():
-            return {}
-        try:
-            return {f["scene_id"]: f for f in json.loads(path.read_text())}
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return {}
-
-    def save_manifest(manifest: dict[str, dict], analysis: BookAnalysis) -> None:
-        order = {s.id: i for i, s in enumerate(analysis.scenes)}
-        rows = sorted(manifest.values(), key=lambda f: order.get(f["scene_id"], 1 << 30))
-        (out_dir / "manifest.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
-
-    def image_url(frame: Optional[dict]) -> Optional[str]:
-        if not frame or not frame.get("image_path"):
+    def image_url(frame: Optional[Frame]) -> Optional[str]:
+        if not frame or not frame.image_path:
             return None
-        name = Path(frame["image_path"]).name
+        name = Path(frame.image_path).name
         fpath = frames_dir / name
         if not fpath.exists():
             return None
         return f"/frames/{name}?v={int(fpath.stat().st_mtime)}"
 
-    def ref_urls(frame: Optional[dict]) -> list[str]:
+    def ref_urls(frame: Optional[Frame]) -> list[str]:
         urls = []
-        for ref in (frame or {}).get("references", []) or []:
+        for ref in (frame.references if frame else []) or []:
             name = Path(ref).name
             if (portraits_dir / name).exists():
                 urls.append(f"/portraits/{name}")
         return urls
 
-    def scene_payload(scene, manifest) -> dict:
-        frame = manifest.get(scene.id)
+    def shot_payload(shot) -> dict:
+        frame = shot.frame
         return {
-            **scene.model_dump(),
-            "frame": frame,
+            **shot.to_scene().model_dump(),
+            "camera_move": shot.camera_move,
+            "frame": frame.model_dump() if frame else None,
             "image_url": image_url(frame),
             "reference_urls": ref_urls(frame),
         }
@@ -106,23 +105,26 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
 
     @app.get("/api/state")
     def state() -> dict:
-        analysis = load_analysis()
-        manifest = load_manifest()
+        pid, seg_id = _ids()
+        view = store.production_view(pid)
+        seg = store.segment_view(seg_id)
+        shots = seg.shots if seg else []
         return {
-            "title": analysis.title,
-            "author": analysis.author,
+            "title": view.title if view else "",
+            "author": view.author if view else "",
             "provider": "stub (dry-run)" if dry_run else config.generation.provider,
             "style": config.project.style,
-            "characters": [c.model_dump() for c in analysis.characters],
-            "scenes": [scene_payload(s, manifest) for s in analysis.scenes],
+            "characters": [c.model_dump() for c in (view.characters if view else [])],
+            "scenes": [shot_payload(s) for s in shots],
         }
 
     @app.post("/api/scenes/{scene_id}/regenerate")
     def regenerate(scene_id: str, req: RegenerateRequest) -> dict:
-        analysis = load_analysis()
+        pid, seg_id = _ids()
+        analysis = store.load_segment_analysis(pid, seg_id)
         try:
             frame: Frame = pipeline.regenerate_frame(
-                analysis, out_dir, scene_id,
+                analysis, out_dir, store, pid, seg_id, scene_id,
                 prompt_override=req.prompt or None,
                 style_override=req.style or None,
                 dry_run=dry_run,
@@ -132,11 +134,10 @@ def create_app(out_dir: str | Path, config: Optional[Config] = None, dry_run: bo
         if not frame.ok:
             raise HTTPException(502, frame.error or "Image generation failed.")
 
-        manifest = load_manifest()
-        manifest[scene_id] = frame.model_dump()
-        save_manifest(manifest, analysis)
-
-        scene = next(s for s in analysis.scenes if s.id == scene_id)
-        return scene_payload(scene, manifest)
+        seg = store.segment_view(seg_id)
+        shot = next((s for s in (seg.shots if seg else []) if s.slug == scene_id), None)
+        if shot is None:
+            raise HTTPException(404, f"Unknown scene: {scene_id}")
+        return shot_payload(shot)
 
     return app

@@ -2,12 +2,8 @@
 
 from audiobook_visualizer.config import Config
 from audiobook_visualizer.models import BookAnalysis, Character, Scene
-from audiobook_visualizer.pipeline import (
-    Pipeline,
-    _chunk_label,
-    _load_characters,
-    _save_characters,
-)
+from audiobook_visualizer.pipeline import Pipeline, _chunk_label
+from audiobook_visualizer.store import ProductionStore
 
 
 def test_chunk_label_from_structure_filename():
@@ -17,13 +13,17 @@ def test_chunk_label_from_structure_filename():
 
 
 def test_character_bible_roundtrip(tmp_path):
-    chars = [Character(name="Ahab", aliases=["Captain"], description="scarred")]
-    _save_characters(tmp_path, chars)
-    loaded = _load_characters(tmp_path)
+    store = ProductionStore.open(tmp_path)
+    pid = store.get_or_create_production(title="Moby")
+    store.upsert_characters(pid, [Character(name="Ahab", aliases=["Captain"], description="scarred")])
+    loaded = store.list_characters(pid)
     assert [c.name for c in loaded] == ["Ahab"]
     assert loaded[0].aliases == ["Captain"]
-    # Missing file -> empty.
-    assert _load_characters(tmp_path / "nope") == []
+    # Merge: a richer description wins, aliases union.
+    store.upsert_characters(pid, [Character(name="ahab", aliases=["Ahab"], description="a tall scarred whaler")])
+    merged = store.list_characters(pid)
+    assert len(merged) == 1 and merged[0].description == "a tall scarred whaler"
+    assert set(merged[0].aliases) == {"Ahab", "Captain"}
 
 
 def _analysis(scene_id: str) -> BookAnalysis:

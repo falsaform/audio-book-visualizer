@@ -17,9 +17,14 @@ frames plus a browsable HTML gallery.
 │ .epub/.pdf │ ───────► │ character bible      │  │ build prompt       │
 │ .txt       │          │ scene / visual-      │► │ (+character bible) │ ► frames/*.png
 │ audiobook  │ ──┐      │   moment extraction  │  │ DALL·E image       │   gallery.html
-└────────────┘   │ ts   └─────────────────────┘  └────────────────────┘   manifest.json
+└────────────┘   │ ts   └─────────────────────┘  └────────────────────┘   production.db
                  └────────► align scenes to audio timestamps (optional)
 ```
+
+Characters, scenes, shots and frames are persisted to a per-book **`production.db`**
+(SQLite, via SQLModel) — the single source of truth that the video compiler, web UI
+and gallery all read from. Frame images stay as files on disk; the database stores
+their paths.
 
 ## Status
 
@@ -65,8 +70,8 @@ just shell      # open a shell in the container
 
 > **File ownership.** `just` runs the container as your host user/group
 > (`--user $(id -u):$(id -g)`), so everything written to `output/` is owned by
-> **you** — you can edit `analysis.json` and delete frames without `sudo`. This
-> needs a Unix host (Linux/macOS/WSL). If you built an earlier image, run
+> **you** — you can browse the `production.db` and delete frames without `sudo`.
+> This needs a Unix host (Linux/macOS/WSL). If you built an earlier image, run
 > `just down` once to drop the old root-owned cache volumes, then `just build`.
 
 ## Quickstart
@@ -87,7 +92,7 @@ just visualize --ebook book.pdf --analyze-only
 just visualize --ebook book.epub --dry-run --max-frames 6
 
 # Inspect the character bible from a finished run
-just abv characters output/analysis.json
+just abv characters output
 ```
 
 Put your input files in the project directory (it is bind-mounted into the
@@ -166,8 +171,8 @@ single chunk regardless of book length. Set `chunk_seconds: 0` to disable (only
 for tiny inputs).
 
 `audiobook_structure.json` contains every chapter and paragraph with its audio
-start/end times. A full `visualize` run on an audiobook writes the same file
-alongside `analysis.json`.
+start/end times. A full `visualize` run on an audiobook writes this file at the
+book level, alongside `production.db`.
 
 **Reuse the structure (skip re-transcribing).** Once you're happy with a
 `segment` result, feed it straight into the full pipeline — `visualize` will use
@@ -194,14 +199,15 @@ just visualize --structure output/legion/audiobook_structure_0005-20min.json
 ```
 ```
 output/legion/
-  characters.json            # accumulating character bible (shared)
+  production.db              # the source of truth (characters, scenes, shots, frames)
   portraits/<name>_<hash>.png  # reference portraits, cached & shared
-  0000-5min/                 # chunk: analysis.json, frames/, manifest.json, gallery.html
+  0000-5min/                 # chunk: frames/, gallery.html, video.mp4
   0005-20min/
 ```
 
-- **Continuity:** each chunk seeds analysis with the accumulated `characters.json`,
-  so recurring characters stay consistent (and scene ids are namespaced per chunk).
+- **Continuity:** each chunk seeds analysis with the accumulated character bible
+  in `production.db`, so recurring characters stay consistent (and scene ids are
+  namespaced per chunk).
 - **Caching across chunks:** portraits are keyed by an appearance hash. The same
   look is reused (no re-generation, no wasted quota); a character whose look
   *changes* over the book gets a new portrait — so evolving appearances are kept.
@@ -236,7 +242,7 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 | `--ebook / -e` | Path to `.pdf` / `.epub` / `.txt`. |
 | `--audio / -a` | Path to audiobook (`.mp3` / `.m4a` / `.m4b` / `.wav`). |
 | `--structure` | Reuse an existing `audiobook_structure.json` (skip transcription). |
-| `--analyze-only` | Stop after analysis; write `analysis.json`, skip images. |
+| `--analyze-only` | Stop after analysis; persist scenes to `production.db`, skip images. |
 | `--dry-run` | Use the offline stub image provider (no DALL·E/Gemini calls). |
 | `--provider / -p` | Image provider: `openai` / `gemini` / `stub`. |
 | `--force` | Regenerate all frames, ignoring the cache. |
@@ -272,13 +278,14 @@ face/outfit recurs across frames. Portraits land in `output/portraits/` and are
 cached. Toggle with `generation.character_portraits`.
 
 **Edit-and-regenerate (delete to redo).** Re-running keeps any frame or portrait
-whose file already exists, and reuses an existing `analysis.json` instead of
-re-analyzing. So the iteration loop is:
+whose file already exists, and reuses a segment that's already in `production.db`
+instead of re-analyzing. So the iteration loop is:
 
-1. Run once. Inspect `analysis.json` and the frames.
-2. Hand-edit `analysis.json` (tweak a scene's description, characters, etc.).
+1. Run once. Browse the gallery (or the **web UI**) and the frames.
+2. Tweak a single frame's prompt/style in the web UI, or `--reanalyze` to rebuild
+   the whole segment's analysis from the source.
 3. **Delete** the frames/portraits you want redone.
-4. Re-run — only the missing ones regenerate (from your edited analysis).
+4. Re-run — only the missing ones regenerate.
 
 `--reanalyze` forces a fresh analysis; `--force` regenerates every image even if
 it exists; `generation.cache: false` disables the keep-existing behavior.
@@ -306,11 +313,11 @@ just web --out runs/moby       # browse a specific run
 just web --dry-run             # regenerate with the offline stub provider (no API calls)
 ```
 
-It reads an existing run's `analysis.json` + `manifest.json`, so do a
-`visualize` (or `visualize --analyze-only`) first. The page lists every scene;
-selecting one shows its metadata, reference portraits, and an editable prompt
-with a **Regenerate** button. The manifest is updated in place. Locally (outside
-Docker) install the extra: `pip install -e '.[web]'`.
+It reads an existing run's `production.db`, so do a `visualize` (or `visualize
+--analyze-only`) first. The page lists every scene; selecting one shows its
+metadata, reference portraits, and an editable prompt with a **Regenerate**
+button. The new frame is persisted to the store. Locally (outside Docker) install
+the extra: `pip install -e '.[web]'`.
 
 ## Video
 
@@ -386,16 +393,16 @@ subfolder under the book dir (see [above](#rendering-chunks-incrementally-no-ove
 
 Book level (shared across chunks):
 
-- `characters.json` — the accumulating character bible.
+- `production.db` — the source of truth: characters, scenes/shots, and frame
+  records (prompt, provider, references, resulting file) for every chunk.
 - `portraits/<name>_<hash>.png` — reference portraits, cached by appearance.
 - `audiobook_structure.json` — chapters + paragraphs with audio timestamps.
 
 Per run / per chunk:
 
-- `analysis.json` — characters + scenes for that chunk.
-- `frames/*.png` (+ `*.json` cache sidecars) — one image per scene (widescreen).
-- `manifest.json` — each frame's prompt, provider, references and resulting file.
+- `frames/*.png` — one image per shot (widescreen).
 - `gallery.html` — a self-contained gallery to browse the frames.
+- `video.mp4` — the compiled segment video (after `just video`).
 
 ## How it works
 

@@ -53,19 +53,18 @@ def test_force_regenerates_existing(tmp_path):
     assert not forced[0].cached
 
 
-def test_run_reuses_existing_analysis(tmp_path, monkeypatch):
+def test_run_reuses_existing_analysis(tmp_path, monkeypatch, store_seeder):
     monkeypatch.setattr(
         pmod, "transcribe_audio",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not transcribe")),
     )
     book = tmp_path / "legion"
-    chunk = book / "0000-5min"
-    chunk.mkdir(parents=True)
-    analysis = BookAnalysis(
+    store_seeder(
+        book,
+        [{"label": "0000-5min", "start": 0.0, "end": 300.0,
+          "scenes": [{"slug": "0000-5min_001_00", "desc": "a scene", "start": 0.0, "end": 5.0}]}],
         title="Legion",
-        scenes=[Scene(id="0000-5min_001_00", visual_description="a scene")],
     )
-    (chunk / "analysis.json").write_text(analysis.model_dump_json())
 
     cfg = Config()
     cfg.output.dir = str(book)
@@ -75,14 +74,17 @@ def test_run_reuses_existing_analysis(tmp_path, monkeypatch):
 
     assert result.title == "Legion"
     # Generation ran from the reused analysis (no transcription).
-    assert (chunk / "frames" / "0000-5min_001_00.png").exists()
+    assert (book / "0000-5min" / "frames" / "0000-5min_001_00.png").exists()
 
 
-def test_reanalyze_bypasses_reuse(tmp_path):
+def test_reanalyze_bypasses_reuse(tmp_path, store_seeder):
     book = tmp_path / "legion"
-    chunk = book / "0000-5min"
-    chunk.mkdir(parents=True)
-    (chunk / "analysis.json").write_text(BookAnalysis(title="X").model_dump_json())
+    store_seeder(
+        book,
+        [{"label": "0000-5min", "start": 0.0, "end": 300.0,
+          "scenes": [{"slug": "0000-5min_001_00", "desc": "x"}]}],
+        title="X",
+    )
 
     cfg = Config()
     cfg.output.dir = str(book)

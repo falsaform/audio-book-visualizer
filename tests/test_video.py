@@ -1,54 +1,47 @@
 """Tests for per-segment video compilation (ffmpeg mocked)."""
 
-import json
 from pathlib import Path
 
 import pytest
 
 import audiobook_visualizer.video as video_mod
-from audiobook_visualizer.models import BookAnalysis, Frame, Scene
 from audiobook_visualizer.video import (
     FrameCue,
     _frames_concat,
-    _window,
     collect_segments,
     compile_videos,
 )
 
 
-def _chunk(book: Path, label: str, scenes_frames: list[tuple[str, float, float]]):
-    """Create a chunk dir with analysis.json, manifest.json and frame PNGs."""
-    d = book / label if label else book
-    (d / "frames").mkdir(parents=True, exist_ok=True)
-    scenes, frames = [], []
-    for sid, start, end in scenes_frames:
-        img = d / "frames" / f"{sid}.png"
-        img.write_bytes(b"\x89PNG")
-        scenes.append(Scene(id=sid, title=sid, start_time=start, end_time=end))
-        frames.append(Frame(scene_id=sid, prompt="p", image_path=str(img)).model_dump())
-    (d / "analysis.json").write_text(BookAnalysis(scenes=scenes).model_dump_json())
-    (d / "manifest.json").write_text(json.dumps(frames))
-    return d
+def _seg(label, start, end, frames):
+    """A seed-spec segment whose scenes all have rendered frames."""
+    return {
+        "label": label, "start": start, "end": end,
+        "scenes": [
+            {"slug": sid, "start": s, "end": e, "frame": True}
+            for sid, s, e in frames
+        ],
+    }
 
 
-def test_window_from_chunk_name():
-    cues = [FrameCue(Path("a.png"), 100.0, 160.0)]
-    assert _window("0000-60min", cues, 0.0) == (0.0, 3600.0)
-    assert _window("0060-120min", cues, 0.0) == (3600.0, 7200.0)
-    # "to end" suffix uses the audio total.
-    assert _window("0060-endmin", cues, 9000.0) == (3600.0, 9000.0)
-    # No window in the name -> span of the frames.
-    assert _window("misc", cues, 0.0) == (100.0, 160.0)
-
-
-def test_collect_segments_per_chunk(tmp_path):
+def test_segment_window_from_store(tmp_path, store_seeder):
     book = tmp_path / "swarm"
-    _chunk(book, "0000-60min", [("a_001_00", 60.0, 120.0), ("a_001_01", 600.0, 660.0)])
-    _chunk(book, "0060-120min", [("b_001_00", 3700.0, 3760.0)])
+    store_seeder(book, [_seg("0000-60min", 0.0, 3600.0, [("a_001_00", 60.0, 120.0)])])
+    segs = collect_segments(book, total_audio=9000.0)
+    # The window now comes from the persisted Segment row (not the folder name).
+    assert segs[0].start == 0.0 and segs[0].end == 3600.0
+
+
+def test_collect_segments_per_chunk(tmp_path, store_seeder):
+    book = tmp_path / "swarm"
+    store_seeder(book, [
+        _seg("0000-60min", 0.0, 3600.0, [("a_001_00", 60.0, 120.0), ("a_001_01", 600.0, 660.0)]),
+        _seg("0060-120min", 3600.0, 7200.0, [("b_001_00", 3700.0, 3760.0)]),
+    ])
 
     segs = collect_segments(book, total_audio=9000.0)
     assert [s.label for s in segs] == ["0000-60min", "0060-120min"]
-    # Each segment's window comes from its folder name, not the whole book.
+    # Each segment's window comes from its own row, not the whole book.
     assert segs[0].start == 0.0 and segs[0].end == 3600.0
     assert segs[1].start == 3600.0 and segs[1].end == 7200.0
     assert len(segs[0].cues) == 2 and len(segs[1].cues) == 1
@@ -63,10 +56,12 @@ def test_frames_concat_is_window_relative():
     assert text.count("file '/f/b.png'") == 2  # last repeated for the demuxer
 
 
-def test_compile_videos_renders_per_segment_and_master(tmp_path, monkeypatch):
+def test_compile_videos_renders_per_segment_and_master(tmp_path, monkeypatch, store_seeder):
     book = tmp_path / "swarm"
-    _chunk(book, "0000-60min", [("a_001_00", 60.0, 120.0)])
-    _chunk(book, "0060-120min", [("b_001_00", 3700.0, 3760.0)])
+    store_seeder(book, [
+        _seg("0000-60min", 0.0, 3600.0, [("a_001_00", 60.0, 120.0)]),
+        _seg("0060-120min", 3600.0, 7200.0, [("b_001_00", 3700.0, 3760.0)]),
+    ])
 
     monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/audio/swarm.m4b")])
@@ -197,10 +192,12 @@ def test_compile_videos_requires_frames(tmp_path, monkeypatch):
         compile_videos(tmp_path / "empty", "/a.m4b")
 
 
-def test_segment_video_reused_until_frames_change(tmp_path, monkeypatch):
+def test_segment_video_reused_until_frames_change(tmp_path, monkeypatch, store_seeder):
     book = tmp_path / "swarm"
-    _chunk(book, "0000-60min", [("a_001_00", 60.0, 120.0)])
-    _chunk(book, "0060-120min", [("b_001_00", 3700.0, 3760.0)])
+    store_seeder(book, [
+        _seg("0000-60min", 0.0, 3600.0, [("a_001_00", 60.0, 120.0)]),
+        _seg("0060-120min", 3600.0, 7200.0, [("b_001_00", 3700.0, 3760.0)]),
+    ])
 
     monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/audio/swarm.m4b")])
@@ -239,9 +236,9 @@ def test_segment_video_reused_until_frames_change(tmp_path, monkeypatch):
     assert sorted(rendered) == ["0000-60min", "0060-120min"]
 
 
-def test_single_chunk_at_book_dir_is_the_result(tmp_path, monkeypatch):
+def test_single_chunk_at_book_dir_is_the_result(tmp_path, monkeypatch, store_seeder):
     book = tmp_path / "solo"
-    _chunk(book, "", [("s1", 10.0, 20.0)])  # analysis.json directly in book dir
+    store_seeder(book, [_seg("full", 10.0, 20.0, [("s1", 10.0, 20.0)])])  # one "full" segment
 
     monkeypatch.setattr(video_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(video_mod, "gather_audio_files", lambda p: [Path("/a.m4b")])

@@ -59,12 +59,12 @@ def test_generate_and_gallery(tmp_path: Path):
     assert [f.scene_id for f in frames] == ["scene_001_00", "scene_002_00"]
 
 
-def test_gallery_html_contains_scene_titles(tmp_path: Path):
+def test_gallery_html_contains_scene_titles(tmp_path: Path, book_view):
     cfg = Config()
     pipeline = Pipeline(cfg)
-    frames = pipeline.generate(_analysis(), tmp_path, dry_run=True)
+    pipeline.generate(_analysis(), tmp_path, dry_run=True)
 
-    gallery = render_gallery(_analysis(), frames, tmp_path)
+    gallery = render_gallery(book_view(tmp_path), tmp_path)
     html = gallery.read_text()
     assert "The harbor at dawn" in html
     assert "Ahab on the quarterdeck" in html

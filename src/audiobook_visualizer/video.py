@@ -11,8 +11,6 @@ demuxer; nothing is held in memory, and encode progress is reported live.
 from __future__ import annotations
 
 import hashlib
-import json
-import re
 import shutil
 import subprocess
 import tempfile
@@ -21,13 +19,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .ingest import audio_total_duration, gather_audio_files
-from .models import BookAnalysis
+from .store import ProductionStore
 
 LogFn = Callable[[str], None]
 ProgressFn = Callable[[float, float], None]  # (seconds_done, seconds_total)
-
-_WINDOW_RE = re.compile(r"(\d+)-(\d+)min")
-_WINDOW_END_RE = re.compile(r"(\d+)-endmin")
 
 
 @dataclass
@@ -64,75 +59,56 @@ class Segment:
 
 
 def collect_segments(book_dir: str | Path, total_audio: float = 0.0) -> list[Segment]:
-    """One :class:`Segment` per rendered chunk, with its time window and frames.
+    """One :class:`Segment` per rendered chunk, read from the production store.
 
-    The window comes from the chunk folder name when it encodes one (e.g.
-    ``0000-60min``); otherwise it falls back to the span of the chunk's frames.
+    Each segment's time window is the span persisted on its :class:`Segment` row
+    (what the chunk folder name used to encode); cues come from its shots' frames.
     """
     book_dir = Path(book_dir)
-    segments: list[Segment] = []
+    store = ProductionStore.open(book_dir)
+    production_id = store.get_production_id()
+    if production_id is None:
+        return []
+    view = store.production_view(production_id)
+    if view is None:
+        return []
 
-    for analysis_path in sorted(book_dir.rglob("analysis.json")):
-        cues = _chunk_cues(analysis_path)
+    segments: list[Segment] = []
+    for seg in view.segments:
+        cues: list[FrameCue] = []
+        for shot in seg.shots:
+            if shot.start_time is None:
+                continue
+            frame = shot.frame
+            if not frame or not frame.image_path or frame.error:
+                continue
+            chunk_dir = book_dir if seg.chunk_label == "full" else book_dir / seg.chunk_label
+            img = _resolve_image(frame.image_path, chunk_dir, shot.slug)
+            if img is None:
+                continue
+            cues.append(FrameCue(img, shot.start_time, shot.end_time or shot.start_time))
         if not cues:
             continue
-        chunk_dir = analysis_path.parent
-        label = chunk_dir.name if chunk_dir != book_dir else "full"
-        start, end = _window(chunk_dir.name, cues, total_audio)
+        cues.sort(key=lambda c: c.start)
+
+        chunk_dir = book_dir if seg.chunk_label == "full" else book_dir / seg.chunk_label
+        label = "full" if seg.chunk_label == "full" else seg.chunk_label
+        start, end = seg.start, seg.end
+        if end <= start:  # open-ended/undated window -> the span the frames cover
+            end = max(c.end for c in cues)
+        if total_audio:
+            end = min(end, total_audio)
         segments.append(Segment(chunk_dir, label, start, end, cues))
 
     segments.sort(key=lambda s: s.start)
     return segments
 
 
-def _chunk_cues(analysis_path: Path) -> list[FrameCue]:
-    try:
-        analysis = BookAnalysis.model_validate_json(analysis_path.read_text())
-    except (OSError, ValueError):
-        return []
-    manifest_path = analysis_path.parent / "manifest.json"
-    frames_by_id: dict[str, dict] = {}
-    if manifest_path.exists():
-        try:
-            frames_by_id = {f["scene_id"]: f for f in json.loads(manifest_path.read_text())}
-        except (OSError, ValueError, KeyError):
-            frames_by_id = {}
-
-    cues: list[FrameCue] = []
-    for scene in analysis.scenes:
-        if scene.start_time is None:
-            continue
-        frame = frames_by_id.get(scene.id)
-        if not frame or not frame.get("image_path") or frame.get("error"):
-            continue
-        img = _resolve_image(frame["image_path"], analysis_path.parent, scene.id)
-        if img is None:
-            continue
-        cues.append(FrameCue(img, scene.start_time, scene.end_time or scene.start_time))
-    cues.sort(key=lambda c: c.start)
-    return cues
-
-
-def _window(name: str, cues: list[FrameCue], total_audio: float) -> tuple[float, float]:
-    """Time window for a chunk: from its folder name, else its frame span."""
-    if m := _WINDOW_RE.search(name):
-        return float(m.group(1)) * 60.0, float(m.group(2)) * 60.0
-    if m := _WINDOW_END_RE.search(name):
-        start = float(m.group(1)) * 60.0
-        return start, (total_audio if total_audio else max(c.end for c in cues))
-    # Fall back to the span the frames cover.
-    start = min(c.start for c in cues)
-    end = max(c.end for c in cues)
-    if total_audio:
-        end = min(end, total_audio)
-    return start, end
-
-
-def _resolve_image(image_path: str, chunk_dir: Path, scene_id: str) -> Optional[Path]:
+def _resolve_image(image_path: str, chunk_dir: Path, slug: str) -> Optional[Path]:
     for cand in (
         Path(image_path),
         chunk_dir / "frames" / Path(image_path).name,
-        chunk_dir / "frames" / f"{scene_id}.png",
+        chunk_dir / "frames" / f"{slug}.png",
     ):
         if cand.exists():
             return cand.resolve()
