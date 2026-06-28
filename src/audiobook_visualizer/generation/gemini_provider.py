@@ -45,9 +45,11 @@ class GeminiImageProvider(ImageProvider):
         prompt: str,
         out_path: Path,
         references: Optional[Sequence[Path]] = None,
+        size: Optional[str] = None,
     ) -> Path:
         from PIL import Image
 
+        target_size = size or self.size
         out_path = out_path.with_suffix(".png")
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -70,7 +72,7 @@ class GeminiImageProvider(ImageProvider):
                     raise RuntimeError(
                         "Gemini returned no image (possibly blocked by safety filters)."
                     )
-                out_path.write_bytes(_fit_to_size(data, self.size))
+                out_path.write_bytes(_fit_to_size(data, target_size))
                 return out_path
             except Exception as exc:  # noqa: BLE001 - classify then retry/abort
                 if _is_quota_error(exc):

@@ -98,10 +98,18 @@ def visualize(
         False, "--dry-run", help="Use the offline stub image provider (no API calls)."
     ),
     force: bool = typer.Option(
-        False, "--force", help="Regenerate all frames, ignoring the cache."
+        False, "--force", help="Regenerate all frames (and portraits), even if they exist."
+    ),
+    reanalyze: bool = typer.Option(
+        False, "--reanalyze", help="Re-run analysis even if analysis.json already exists."
     ),
 ):
-    """Run the full pipeline: ingest -> analyze -> generate frames -> gallery."""
+    """Run the full pipeline: ingest -> analyze -> generate frames -> gallery.
+
+    If a chunk's analysis.json already exists it is reused (skip re-analysis);
+    pass --reanalyze to regenerate it. Frames/portraits are kept if their file
+    exists — delete the ones you want redone (or use --force) and re-run.
+    """
     load_env()
     config = Config.load(config_path)
 
@@ -131,6 +139,7 @@ def visualize(
             analyze_only=analyze_only,
             dry_run=dry_run,
             force=force,
+            reanalyze=reanalyze,
         )
     except Exception as exc:  # noqa: BLE001 - surface a clean message to the user
         console.print(f"[red]Pipeline failed:[/red] {exc}")

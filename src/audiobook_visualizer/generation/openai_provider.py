@@ -38,6 +38,7 @@ class OpenAIImageProvider(ImageProvider):
         prompt: str,
         out_path: Path,
         references: Optional[Sequence[Path]] = None,
+        size: Optional[str] = None,
     ) -> Path:
         # references are ignored: DALL-E 3 generate() takes no image input.
         out_path = out_path.with_suffix(".png")
@@ -46,7 +47,7 @@ class OpenAIImageProvider(ImageProvider):
         kwargs = {
             "model": self.model,
             "prompt": prompt,
-            "size": self.size,
+            "size": size or self.size,
             "n": 1,
         }
         if self.model == "dall-e-3":

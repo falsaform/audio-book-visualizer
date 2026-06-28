@@ -41,9 +41,10 @@ generation:
   quality: standard               # standard | hd  (dall-e-3 only)
   max_frames: 0                   # 0 = generate a frame for every scene; >0 caps it
   concurrency: 3                  # parallel image requests
-  cache: true                     # reuse unchanged frames across runs
+  cache: true                     # keep existing frames/portraits (delete one to redo it)
   character_portraits: true       # render a per-character portrait and feed it as a
                                   # reference for consistency (gemini; ignored by DALL-E)
+  portrait_size: 1024x1024        # portraits are square (avoids the widescreen face crop)
   shot_variety: true              # include the per-scene shot type (wide/close-up) in prompts
 
 output:

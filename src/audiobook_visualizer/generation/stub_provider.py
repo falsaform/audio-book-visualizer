@@ -33,29 +33,38 @@ class StubImageProvider(ImageProvider):
         prompt: str,
         out_path: Path,
         references: Optional[Sequence[Path]] = None,
+        size: Optional[str] = None,
     ) -> Path:
         out_path = out_path.with_suffix(".png")
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        width, height = self.width, self.height
+        if size:
+            try:
+                width, height = (int(x) for x in size.lower().split("x"))
+            except ValueError:
+                pass
         try:
-            self._render_with_pillow(prompt, out_path, len(references or []))
+            self._render_with_pillow(prompt, out_path, len(references or []), width, height)
         except Exception:
             # Pillow not available: write a tiny valid PNG so downstream code
             # (gallery, manifest) still has a real file to point at.
             out_path.write_bytes(_MINIMAL_PNG)
         return out_path
 
-    def _render_with_pillow(self, prompt: str, out_path: Path, n_refs: int) -> None:
+    def _render_with_pillow(
+        self, prompt: str, out_path: Path, n_refs: int, width: int, height: int
+    ) -> None:
         from PIL import Image, ImageDraw
 
         # Deterministic background color derived from the prompt.
         digest = hashlib.md5(prompt.encode("utf-8")).hexdigest()
         color = (int(digest[0:2], 16), int(digest[2:4], 16), int(digest[4:6], 16))
-        img = Image.new("RGB", (self.width, self.height), color)
+        img = Image.new("RGB", (width, height), color)
         draw = ImageDraw.Draw(img)
         wrapped = textwrap.fill(prompt[:400], width=48)
         draw.multiline_text((24, 24), wrapped, fill=(255, 255, 255))
         footer = f"[stub frame · {n_refs} ref(s)]" if n_refs else "[stub frame]"
-        draw.text((24, self.height - 28), footer, fill=(255, 255, 255))
+        draw.text((24, height - 28), footer, fill=(255, 255, 255))
         img.save(out_path)
 
 

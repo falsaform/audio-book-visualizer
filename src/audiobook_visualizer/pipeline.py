@@ -313,20 +313,27 @@ class Pipeline:
             return {}
         self._progress(f"Rendering {len(characters)} character portrait(s)")
 
+        portrait_size = self.config.generation.portrait_size
         out: dict[str, Path] = {}
         for char in characters:
             prompt = build_portrait_prompt(char, self.config.project.style)
             key = cache.compute_key(
-                {"prompt": prompt, "provider": provider.name, "model": provider.model}
+                {
+                    "prompt": prompt,
+                    "provider": provider.name,
+                    "model": provider.model,
+                    "size": portrait_size,
+                }
             )
             # Appearance hash in the filename: same look -> same file (shared and
-            # cached across chunks); changed look -> a new portrait.
+            # cached across chunks); changed look -> a new portrait. Existence-based:
+            # delete a portrait to regenerate it.
             path = portraits_dir / f"{_slug(char.name)}_{key[:8]}.png"
             try:
-                if self.config.generation.cache and not force and cache.is_cached(path, key):
+                if self.config.generation.cache and not force and path.exists():
                     pass  # reuse the existing portrait
                 else:
-                    provider.generate(prompt, path)
+                    provider.generate(prompt, path, size=portrait_size)
                     cache.write_sidecar(path, key, {"character": char.name})
                 # Map canonical name and aliases to the portrait.
                 out[char.name.lower()] = path
@@ -389,22 +396,19 @@ class Pipeline:
             references=[str(r) for r in refs],
         )
         out_path = (frames_dir / scene.id).with_suffix(".png")
-        key = cache.compute_key(
-            {
-                "prompt": prompt,
-                "provider": provider.name,
-                "model": provider.model,
-                "size": self.config.generation.size,
-                "refs": cache.reference_digests(refs),
-            }
-        )
         try:
-            if self.config.generation.cache and not force and cache.is_cached(out_path, key):
+            # Existence-based: keep an existing frame; delete it to regenerate
+            # (or pass --force). Lets you hand-edit analysis.json, delete the
+            # frames you want redone, and re-run to rebuild only those.
+            if self.config.generation.cache and not force and out_path.exists():
                 frame.image_path = str(out_path)
                 frame.cached = True
                 return frame
             path = provider.generate(prompt, frames_dir / scene.id, references=refs)
             frame.image_path = str(path)
+            key = cache.compute_key(
+                {"prompt": prompt, "provider": provider.name, "model": provider.model}
+            )
             cache.write_sidecar(path, key, {"prompt": prompt})
         except Exception as exc:  # noqa: BLE001 - one frame failing shouldn't abort
             frame.error = str(exc)
@@ -420,6 +424,7 @@ class Pipeline:
         analyze_only: bool = False,
         dry_run: bool = False,
         force: bool = False,
+        reanalyze: bool = False,
     ) -> BookAnalysis:
         # book_dir holds shared, accumulating state (character bible + portraits);
         # out_dir is per-chunk (analysis, frames, manifest, gallery) so separately
@@ -429,34 +434,41 @@ class Pipeline:
         out_dir = (book_dir / chunk_label) if chunk_label else book_dir
         book_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
-
-        ingested = self.ingest(ebook_path, audio_path, structure_path)
-
-        if ingested.structure is not None and not structure_path:
-            # Freshly segmented (not reusing a structure): persist it at book level.
-            structure_out = book_dir / "audiobook_structure.json"
-            structure_out.write_text(
-                ingested.structure.model_dump_json(indent=2), encoding="utf-8"
-            )
-            self._progress(f"Wrote audiobook structure -> {structure_out}")
-
-        # Continuity: seed analysis with the accumulated character bible.
-        known = _load_characters(book_dir)
-        analysis = self.analyze(
-            ingested.chapters,
-            ingested.title,
-            ingested.author,
-            ingested.transcript,
-            ingested.structure,
-            id_prefix=chunk_label or "scene",
-            known_characters=known,
-        )
-
-        # Persist per-chunk analysis and update the shared character bible.
         analysis_path = out_dir / "analysis.json"
-        analysis_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
-        self._progress(f"Wrote analysis -> {analysis_path}")
-        _save_characters(book_dir, analysis.characters)
+
+        # Skip (re)analysis if it's already been done — reuse the existing (and
+        # possibly hand-edited) analysis.json and go straight to generation.
+        if analysis_path.exists() and not reanalyze:
+            self._progress(f"Reusing existing analysis -> {analysis_path}")
+            self._progress("  (pass --reanalyze to regenerate it from the source)")
+            analysis = BookAnalysis.model_validate_json(analysis_path.read_text())
+        else:
+            ingested = self.ingest(ebook_path, audio_path, structure_path)
+
+            if ingested.structure is not None and not structure_path:
+                # Freshly segmented (not reusing a structure): persist at book level.
+                structure_out = book_dir / "audiobook_structure.json"
+                structure_out.write_text(
+                    ingested.structure.model_dump_json(indent=2), encoding="utf-8"
+                )
+                self._progress(f"Wrote audiobook structure -> {structure_out}")
+
+            # Continuity: seed analysis with the accumulated character bible.
+            known = _load_characters(book_dir)
+            analysis = self.analyze(
+                ingested.chapters,
+                ingested.title,
+                ingested.author,
+                ingested.transcript,
+                ingested.structure,
+                id_prefix=chunk_label or "scene",
+                known_characters=known,
+            )
+
+            # Persist per-chunk analysis and update the shared character bible.
+            analysis_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
+            self._progress(f"Wrote analysis -> {analysis_path}")
+            _save_characters(book_dir, analysis.characters)
 
         if analyze_only:
             return analysis

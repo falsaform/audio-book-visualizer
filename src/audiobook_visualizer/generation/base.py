@@ -28,12 +28,14 @@ class ImageProvider(abc.ABC):
         prompt: str,
         out_path: Path,
         references: Optional[Sequence[Path]] = None,
+        size: Optional[str] = None,
     ) -> Path:
         """Render ``prompt`` to ``out_path`` and return the written path.
 
         ``references`` are optional image paths to condition on (used by
-        providers where ``supports_references`` is True). Implementations should
-        raise on failure; the caller records the error against the frame and
-        continues with the next scene.
+        providers where ``supports_references`` is True). ``size`` (``"WxH"``)
+        overrides the provider's default for this call — e.g. a square portrait
+        vs a widescreen frame. Implementations should raise on failure; the
+        caller records the error against the frame and continues.
         """
         raise NotImplementedError

@@ -265,10 +265,19 @@ then passes the relevant portraits alongside each scene prompt — so the same
 face/outfit recurs across frames. Portraits land in `output/portraits/` and are
 cached. Toggle with `generation.character_portraits`.
 
-**Caching.** Each frame and portrait gets a sidecar recording a hash of its
-inputs (prompt + provider + model + size + reference digests). Re-running only
-regenerates images whose inputs changed; change the style and just those frames
-rebuild. `--force` (or `generation.cache: false`) regenerates everything.
+**Edit-and-regenerate (delete to redo).** Re-running keeps any frame or portrait
+whose file already exists, and reuses an existing `analysis.json` instead of
+re-analyzing. So the iteration loop is:
+
+1. Run once. Inspect `analysis.json` and the frames.
+2. Hand-edit `analysis.json` (tweak a scene's description, characters, etc.).
+3. **Delete** the frames/portraits you want redone.
+4. Re-run — only the missing ones regenerate (from your edited analysis).
+
+`--reanalyze` forces a fresh analysis; `--force` regenerates every image even if
+it exists; `generation.cache: false` disables the keep-existing behavior.
+Portraits are square (`generation.portrait_size`, default `1024x1024`) so the
+face isn't cropped; frames use the widescreen `generation.size`.
 
 **Shot variety.** The analyzer tags each moment with a shot type (wide
 establishing / medium / close-up), folded into the prompt for visual rhythm.

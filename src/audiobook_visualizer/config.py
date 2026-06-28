@@ -64,6 +64,9 @@ class GenerationConfig(BaseModel):
     # for cross-frame consistency. Only effective for providers that support
     # reference images (e.g. gemini); ignored otherwise.
     character_portraits: bool = True
+    # Portraits are head-and-shoulders references — square avoids the widescreen
+    # crop that would cut off the face.
+    portrait_size: str = "1024x1024"
     # Include the analyzer's per-scene shot type (wide/medium/close-up) in prompts.
     shot_variety: bool = True
 
