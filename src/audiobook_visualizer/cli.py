@@ -103,6 +103,11 @@ def visualize(
     reanalyze: bool = typer.Option(
         False, "--reanalyze", help="Re-run analysis even if analysis.json already exists."
     ),
+    per_paragraph: bool = typer.Option(
+        False,
+        "--per-paragraph",
+        help="One frame per paragraph timed to the narration (needs an audiobook).",
+    ),
 ):
     """Run the full pipeline: ingest -> analyze -> generate frames -> gallery.
 
@@ -125,6 +130,8 @@ def visualize(
         config.generation.provider = provider
     if chapter_mode is not None:
         config.audio.chapter_mode = chapter_mode
+    if per_paragraph:
+        config.analysis.mode = "paragraphs"
 
     if not ebook and not audio and not structure:
         console.print("[red]Error:[/red] provide --ebook, --audio, and/or --structure.")

@@ -16,7 +16,7 @@ import json
 from typing import Callable, Optional
 
 from ..config import AnalysisConfig
-from ..models import BookAnalysis, Character, Scene
+from ..models import AudiobookStructure, BookAnalysis, Character, Scene
 from ..utils.llm import build_llm_client
 from . import prompts
 
@@ -65,6 +65,116 @@ class Analyzer:
         return BookAnalysis(
             title=title, author=author, characters=characters, scenes=scenes
         )
+
+    def analyze_paragraphs(
+        self,
+        structure: AudiobookStructure,
+        title: str = "",
+        author: str = "",
+        id_prefix: str = "scene",
+        known_characters: Optional[list[Character]] = None,
+    ) -> BookAnalysis:
+        """One frame per paragraph (or per ``paragraphs_per_scene``), timed
+        exactly to the narration via the structure's paragraph timestamps."""
+        chunks = self._chunk([(ch.title, ch.text) for ch in structure.chapters])
+        self._progress(f"Analyzing {len(chunks)} text chunk(s) for characters")
+        characters = self._build_character_bible(chunks, known_characters)
+        self._progress(f"Identified {len(characters)} character(s)")
+
+        units = self._paragraph_units(structure, id_prefix)
+        self._progress(f"Describing {len(units)} paragraph frame(s)")
+        scenes = self._describe_units(units, _character_summary(characters))
+        self._progress(f"Built {len(scenes)} paragraph scene(s)")
+
+        return BookAnalysis(
+            title=title, author=author, characters=characters, scenes=scenes
+        )
+
+    def _paragraph_units(self, structure: AudiobookStructure, id_prefix: str) -> list[dict]:
+        """Group paragraphs into frame units with exact timestamps."""
+        size = max(1, self.config.paragraphs_per_scene)
+        units: list[dict] = []
+        for ci, chapter in enumerate(structure.chapters, 1):
+            paras = chapter.paragraphs
+            for gi in range(0, len(paras), size):
+                group = paras[gi : gi + size]
+                text = "\n\n".join(p.text for p in group).strip()
+                if not text:
+                    continue
+                units.append(
+                    {
+                        "id": f"{id_prefix}_{ci:03d}_{gi // size:04d}",
+                        "chapter": chapter.title,
+                        "text": text,
+                        "start": group[0].start,
+                        "end": group[-1].end,
+                    }
+                )
+        return units
+
+    def _describe_units(self, units: list[dict], char_summary: str) -> list[Scene]:
+        """Batch units to the model for per-passage visual descriptions."""
+        scenes: list[Scene] = []
+        batch: list[dict] = []
+        chars = 0
+        max_chars = self.config.max_chars_per_chunk
+        for unit in units:
+            if batch and (chars + len(unit["text"]) > max_chars or len(batch) >= 25):
+                scenes.extend(self._describe_batch(batch, char_summary))
+                batch, chars = [], 0
+            batch.append(unit)
+            chars += len(unit["text"])
+        if batch:
+            scenes.extend(self._describe_batch(batch, char_summary))
+        return scenes
+
+    def _describe_batch(self, batch: list[dict], char_summary: str) -> list[Scene]:
+        passages = "\n\n".join(f"[{i + 1}] {u['text']}" for i, u in enumerate(batch))
+        descs: list = []
+        try:
+            data = self._client.complete_json(
+                prompts.PARAGRAPH_SYSTEM,
+                prompts.PARAGRAPH_PROMPT.format(
+                    n=len(batch),
+                    characters=char_summary or "(none identified)",
+                    passages=passages,
+                ),
+                max_tokens=8192,
+            )
+            if isinstance(data, list):
+                descs = data
+        except Exception as exc:  # noqa: BLE001
+            if _is_auth_error(exc):
+                raise RuntimeError(
+                    "Analysis authentication failed. Set a valid ANTHROPIC_API_KEY "
+                    "or CLAUDE_CODE_OAUTH_TOKEN (analysis.provider: claude-code). "
+                    f"Underlying error: {exc}"
+                ) from exc
+            self._progress(f"  (description batch failed: {exc})")
+
+        scenes: list[Scene] = []
+        for i, unit in enumerate(batch):
+            item = descs[i] if i < len(descs) and isinstance(descs[i], dict) else {}
+            scenes.append(
+                Scene(
+                    id=unit["id"],
+                    chapter=unit["chapter"],
+                    start_time=unit["start"],
+                    end_time=unit["end"],
+                    visual_description=str(item.get("visual_description", "")).strip(),
+                    setting=str(item.get("setting", "")).strip(),
+                    time_of_day=str(item.get("time_of_day", "")).strip(),
+                    mood=str(item.get("mood", "")).strip(),
+                    shot_type=str(item.get("shot_type", "")).strip(),
+                    characters_present=[
+                        str(c).strip()
+                        for c in item.get("characters_present", [])
+                        if str(c).strip()
+                    ],
+                    source_excerpt=unit["text"][:160],
+                )
+            )
+        return scenes
 
     # -- chunking -----------------------------------------------------------
 

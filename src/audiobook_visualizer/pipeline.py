@@ -204,6 +204,19 @@ class Pipeline:
         known_characters: Optional[list[Character]] = None,
     ) -> BookAnalysis:
         analyzer = Analyzer(self.config.analysis, on_progress=self._progress)
+
+        # Per-paragraph mode: one frame per paragraph, timestamps taken straight
+        # from the structure — no alignment step needed. Needs a structure.
+        if self.config.analysis.mode == "paragraphs":
+            if structure is not None:
+                return analyzer.analyze_paragraphs(
+                    structure, title=title, author=author,
+                    id_prefix=id_prefix, known_characters=known_characters,
+                )
+            self._progress(
+                "  (paragraph mode needs an audiobook structure; using scene mode)"
+            )
+
         analysis = analyzer.analyze(
             chapters, title=title, author=author,
             id_prefix=id_prefix, known_characters=known_characters,

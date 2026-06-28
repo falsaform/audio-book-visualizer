@@ -89,3 +89,32 @@ BOOK SECTION{chapter_note}:
 {text}
 \"\"\"
 """
+
+PARAGRAPH_SYSTEM = """You are a storyboard artist creating one still frame per \
+passage of an audiobook, so the picture changes as the narration moves. For each \
+numbered passage you describe exactly what the viewer sees while it is read.
+
+Rules:
+- Return ONE object per passage, IN THE SAME ORDER, as a JSON array.
+- Describe what is VISIBLE: setting, characters and their actions, framing,
+  lighting, time of day, mood. Be concrete and specific.
+- For non-visual passages (dialogue, inner thought, narration), depict the
+  speaker/listener and the setting implied by the surrounding story — never an
+  empty or abstract frame.
+- Keep characters consistent with the known-character list; use their names.
+- Vary the shot type for rhythm. No text/captions/words in the image.
+Return STRICT JSON only, no prose."""
+
+PARAGRAPH_PROMPT = """Write one still frame for EACH of the {n} numbered passages \
+below. Return a JSON array of exactly {n} objects, in order, each with keys:
+- "visual_description": 1-3 vivid sentences of what the frame shows
+- "characters_present": array of character names visible (may be empty)
+- "shot_type": e.g. "wide establishing shot", "medium shot", "close-up"
+- "setting", "time_of_day", "mood"
+
+KNOWN CHARACTERS (keep them consistent):
+{characters}
+
+PASSAGES:
+{passages}
+"""

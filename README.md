@@ -342,6 +342,18 @@ mean frames that track the narration more closely; tune
 `analysis.scenes_per_chunk` / `max_chars_per_chunk` (and re-run with
 `--reanalyze` to apply).
 
+For the tightest narration sync, use **per-paragraph mode** — one frame per
+paragraph, timed exactly to when it's spoken (no fuzzy alignment, since the
+structure carries paragraph timestamps):
+
+```bash
+just visualize --structure output/swarm/audiobook_structure_0000-60min.json --per-paragraph
+```
+
+Set `analysis.mode: paragraphs` to make it the default, and
+`analysis.paragraphs_per_scene` to group N paragraphs per frame (raise it to cut
+the frame count / cost). Needs an audiobook structure (the paragraph timestamps).
+
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:
 

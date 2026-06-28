@@ -26,6 +26,12 @@ class AnalysisConfig(BaseModel):
     # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
     provider: str = "auto"
     model: str = "claude-sonnet-4-6"
+    # "scenes": Claude picks key visual moments per chunk. "paragraphs": one
+    # frame per paragraph (or per `paragraphs_per_scene` paragraphs), timed
+    # exactly to the narration — needs an audiobook structure. Most narration-
+    # synced, but more frames/cost.
+    mode: str = "scenes"
+    paragraphs_per_scene: int = 1
     # Smaller chunks + more scenes => denser frames that track the narration more
     # closely (a frame every ~30s rather than every minute-plus). Raise/lower to
     # trade pacing against cost.
