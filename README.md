@@ -181,6 +181,9 @@ just test            # run everything
 just test -k align   # pass args straight through to pytest
 ```
 
-The suite covers ingestion, analysis helpers, prompt building, alignment, and
-the full generation + gallery stages using the offline stub provider — no API
-keys required.
+The suite covers ingestion, analysis helpers, prompt building, alignment,
+audiobook chapter/paragraph segmentation, and the full generation + gallery
+stages using the offline stub provider — no API keys required.
+
+CI (`.github/workflows/ci.yml`) builds the Docker image and runs `just lint`
+and `just test` in the container on every pull request and on pushes to `main`.

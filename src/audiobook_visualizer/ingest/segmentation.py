@@ -140,35 +140,46 @@ def _chapters_from_markers(
 def _chapters_from_headings(
     transcript: Transcript, config: AudioConfig
 ) -> list[AudioChapter]:
-    """Split the transcript where a segment begins with a spoken chapter heading."""
-    # Group segment indices into chapters by detecting heading starts.
-    groups: list[tuple[str, list[TranscriptSegment]]] = []
-    current_title = "Opening"
-    current: list[TranscriptSegment] = []
+    """Split the transcript where a segment begins with a spoken chapter heading.
+
+    The heading words themselves are stripped from the prose (so paragraph text
+    and timestamps reflect the narration, not "Chapter Two."), but the moment the
+    heading is spoken is kept as the chapter's start time.
+    """
+    groups: list[dict] = []
+    current: Optional[dict] = None
 
     for seg in transcript.segments:
-        match = _SPOKEN_CHAPTER_RE.match(seg.text.strip())
+        text = seg.text.strip()
+        match = _SPOKEN_CHAPTER_RE.match(text)
         if match:
             if current:
-                groups.append((current_title, current))
-            current_title = _clean_heading(match.group(0))
-            current = [seg]
+                groups.append(current)
+            heading = match.group(0)
+            remainder = text[len(heading):].lstrip(" .—-:;,").strip()
+            current = {"title": _clean_heading(heading), "start": seg.start, "segs": []}
+            if remainder:  # prose shared the heading's segment — keep it
+                current["segs"].append(
+                    TranscriptSegment(start=seg.start, end=seg.end, text=remainder)
+                )
         else:
-            current.append(seg)
+            if current is None:  # narration before the first heading
+                current = {"title": "Opening", "start": seg.start, "segs": []}
+            current["segs"].append(seg)
     if current:
-        groups.append((current_title, current))
+        groups.append(current)
 
     chapters: list[AudioChapter] = []
-    for i, (title, segs) in enumerate(groups):
-        paragraphs = _segment_into_paragraphs(segs, config)
+    for i, group in enumerate(groups):
+        paragraphs = _segment_into_paragraphs(group["segs"], config)
         if not paragraphs:
             continue
         chapters.append(
             AudioChapter(
                 index=i,
-                title=title,
-                start=segs[0].start,
-                end=segs[-1].end,
+                title=group["title"],
+                start=group["start"],
+                end=group["segs"][-1].end if group["segs"] else group["start"],
                 paragraphs=paragraphs,
             )
         )

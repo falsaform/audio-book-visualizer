@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .analysis import Analyzer
-from .analysis.align import align_scenes
+from .analysis.align import align_scenes, align_scenes_to_structure
 from .config import Config
 from .gallery import render_gallery
 from .generation import build_prompt, get_provider
@@ -96,11 +96,17 @@ class Pipeline:
         title: str,
         author: str,
         transcript: Optional[Transcript],
+        structure: Optional[AudiobookStructure] = None,
     ) -> BookAnalysis:
         analyzer = Analyzer(self.config.analysis, on_progress=self._progress)
         analysis = analyzer.analyze(chapters, title=title, author=author)
 
-        if transcript and self.config.audio.align_to_ebook:
+        if structure is not None:
+            # Audiobook-only: exact timestamps straight from source paragraphs.
+            self._progress("Aligning scenes to paragraph timestamps")
+            align_scenes_to_structure(analysis.scenes, structure)
+        elif transcript and self.config.audio.align_to_ebook:
+            # Ebook + audio: fuzzy-match excerpts against the transcript.
             self._progress("Aligning scenes to audio timestamps")
             align_scenes(analysis.scenes, transcript)
         return analysis
@@ -180,7 +186,11 @@ class Pipeline:
             self._progress(f"Wrote audiobook structure -> {structure_path}")
 
         analysis = self.analyze(
-            ingested.chapters, ingested.title, ingested.author, ingested.transcript
+            ingested.chapters,
+            ingested.title,
+            ingested.author,
+            ingested.transcript,
+            ingested.structure,
         )
 
         # Always persist the analysis so it can be inspected or reused.

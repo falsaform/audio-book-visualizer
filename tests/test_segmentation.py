@@ -1,11 +1,12 @@
 """Tests for audiobook chapter/paragraph segmentation (no audio/API needed)."""
 
+from audiobook_visualizer.analysis.align import align_scenes_to_structure
 from audiobook_visualizer.config import AudioConfig
 from audiobook_visualizer.ingest.segmentation import (
     _segment_into_paragraphs,
     build_audiobook_structure,
 )
-from audiobook_visualizer.models import Transcript, TranscriptSegment
+from audiobook_visualizer.models import Scene, Transcript, TranscriptSegment
 
 
 def _seg(start, end, text):
@@ -75,6 +76,39 @@ def test_single_fallback_when_no_structure():
     assert structure.source == "single"
     assert len(structure.chapters) == 1
     assert structure.chapters[0].title == "My Book"
+
+
+def test_align_scenes_to_structure_uses_paragraph_times():
+    cfg = AudioConfig(chapter_mode="headings")
+    transcript = Transcript(
+        segments=[
+            _seg(0.0, 2.0, "Chapter One."),
+            _seg(2.1, 4.0, "The harbor lay grey under a cold dawn."),
+            _seg(30.0, 32.0, "Chapter Two."),
+            _seg(32.1, 34.0, "Ahab strode the quarterdeck at dusk."),
+        ]
+    )
+    structure = build_audiobook_structure(transcript, "x.mp3", cfg)
+
+    scenes = [
+        Scene(id="s1", chapter="Chapter Two", source_excerpt="Ahab strode the quarterdeck"),
+        Scene(id="s2", chapter="Chapter One", source_excerpt="The harbor lay grey under a cold dawn"),
+    ]
+    align_scenes_to_structure(scenes, structure)
+
+    # Exact paragraph timestamps, not a fuzzy guess.
+    assert scenes[0].start_time == 32.1
+    assert scenes[0].end_time == 34.0
+    assert scenes[1].start_time == 2.1
+
+
+def test_align_scenes_to_structure_ignores_short_excerpt():
+    cfg = AudioConfig(chapter_mode="single")
+    transcript = Transcript(segments=[_seg(0.0, 2.0, "Some narration here that is long enough.")])
+    structure = build_audiobook_structure(transcript, "x.mp3", cfg)
+    scene = Scene(id="s1", source_excerpt="too short")  # < 12 normalized chars
+    align_scenes_to_structure([scene], structure)
+    assert scene.start_time is None
 
 
 def test_as_chapters_shape_feeds_analyzer():

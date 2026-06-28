@@ -4,6 +4,8 @@
 compose := "docker compose"
 service := "app"
 run := compose + " run --rm " + service
+# Non-interactive variant (no TTY) for CI and scripted use.
+runci := compose + " run --rm -T " + service
 
 # Show available recipes
 default:
@@ -59,11 +61,11 @@ demo:
 
 # Run the test suite (pass extra args, e.g. `just test -k align`)
 test *args:
-    {{run}} pytest {{args}}
+    {{runci}} pytest {{args}}
 
 # Lint with ruff
 lint:
-    {{run}} ruff check .
+    {{runci}} ruff check .
 
 # Format with ruff
 fmt:
