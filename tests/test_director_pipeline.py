@@ -93,14 +93,21 @@ def test_director_mode_writes_screenplay_and_shots(tmp_path, monkeypatch):
 def test_director_without_structure_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(anmod, "build_llm_client", lambda cfg: FakeClient())
 
-    book = tmp_path / "ebook"
-    (tmp_path / "b.txt").write_text("Call me Ishmael. Ahab paced the deck and brooded.")
+    from audiobook_visualizer.pipeline import IngestResult
+
+    # Pretend ingest produced chapters + a transcript but no structure (e.g. audio
+    # with segmentation off): director mode can't run -> it falls back to scene mode.
+    monkeypatch.setattr(
+        Pipeline, "ingest",
+        lambda self, audio_path, structure_path=None: IngestResult(
+            chapters=[("Chapter One", "Call me Ishmael. Ahab paced the deck and brooded.")],
+            title="Book", transcript=None, structure=None),
+    )
+
     cfg = Config()
-    cfg.output.dir = str(book)
+    cfg.output.dir = str(tmp_path / "book")
     cfg.analysis.mode = "director"
     cfg.crew.enabled = True
-    cfg.audio.enabled = False  # ebook only -> no structure
 
-    # No structure -> director can't run; it falls back to scene mode (no crash).
-    analysis = Pipeline(cfg).run(ebook_path=str(tmp_path / "b.txt"), analyze_only=True)
-    assert analysis is not None
+    analysis = Pipeline(cfg).run(audio_path="x.m4b", analyze_only=True)
+    assert analysis is not None  # fell back to scene mode, no crash

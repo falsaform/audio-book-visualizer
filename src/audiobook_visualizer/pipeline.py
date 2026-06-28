@@ -16,14 +16,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .analysis import Analyzer
-from .analysis.align import align_scenes, align_scenes_to_structure
+from .analysis.align import align_scenes_to_structure
 from .config import Config
 from .gallery import render_gallery
 from .generation import build_portrait_prompt, build_prompt, cache, get_provider
 from .ingest import (
     audio_file_boundaries,
     build_audiobook_structure,
-    load_ebook,
     transcribe_audio,
 )
 from .models import (
@@ -51,16 +50,6 @@ def _chunk_label(structure_path: str) -> str:
     stem = Path(structure_path).stem
     label = re.sub(r"^audiobook_structure_?", "", stem)
     return label or "full"
-
-
-def _source_label(ebook_path, audio_path, structure_path) -> str:
-    has_text = bool(ebook_path)
-    has_audio = bool(audio_path or structure_path)
-    if has_text and has_audio:
-        return "both"
-    if has_audio:
-        return "audiobook"
-    return "ebook"
 
 
 def _window_from_span(chunk_label: str, span_start: float, span_end: float) -> tuple[float, float]:
@@ -126,20 +115,10 @@ class Pipeline:
 
     def ingest(
         self,
-        ebook_path: Optional[str],
         audio_path: Optional[str],
         structure_path: Optional[str] = None,
     ) -> IngestResult:
         result = IngestResult()
-
-        if ebook_path:
-            self._progress(f"Loading ebook: {ebook_path}")
-            book = load_ebook(ebook_path)
-            result.chapters = [(ch.title, ch.text) for ch in book.chapters]
-            result.title, result.author = book.title, book.author
-            self._progress(
-                f"  {len(result.chapters)} chapter(s), {len(book.full_text):,} chars"
-            )
 
         if structure_path:
             # Reuse a previously segmented audiobook — skip (re)transcription.
@@ -191,7 +170,7 @@ class Pipeline:
                     result.chapters = [("Audiobook transcript", result.transcript.full_text)]
 
         if not result.chapters:
-            raise ValueError("Nothing to analyze: provide an ebook and/or audiobook.")
+            raise ValueError("Nothing to analyze: provide an audiobook or a structure file.")
         return result
 
     def _transcription_progress(self) -> Callable[[float, float], None]:
@@ -216,7 +195,6 @@ class Pipeline:
         chapters: list[tuple[str, str]],
         title: str,
         author: str,
-        transcript: Optional[Transcript],
         structure: Optional[AudiobookStructure] = None,
         id_prefix: str = "scene",
         known_characters: Optional[list[Character]] = None,
@@ -241,13 +219,9 @@ class Pipeline:
         )
 
         if structure is not None:
-            # Audiobook-only: exact timestamps straight from source paragraphs.
+            # Exact timestamps straight from the source paragraphs.
             self._progress("Aligning scenes to paragraph timestamps")
             align_scenes_to_structure(analysis.scenes, structure)
-        elif transcript and self.config.audio.align_to_ebook:
-            # Ebook + audio: fuzzy-match excerpts against the transcript.
-            self._progress("Aligning scenes to audio timestamps")
-            align_scenes(analysis.scenes, transcript)
         return analysis
 
     def _run_crew(
@@ -534,7 +508,6 @@ class Pipeline:
 
     def run(
         self,
-        ebook_path: Optional[str] = None,
         audio_path: Optional[str] = None,
         structure_path: Optional[str] = None,
         analyze_only: bool = False,
@@ -563,7 +536,7 @@ class Pipeline:
             self._progress("  (pass --reanalyze to regenerate it from the source)")
             analysis = store.load_segment_analysis(production_id, segment_id)
         else:
-            ingested = self.ingest(ebook_path, audio_path, structure_path)
+            ingested = self.ingest(audio_path, structure_path)
 
             if ingested.structure is not None and not structure_path:
                 # Freshly segmented (not reusing a structure): persist at book level.
@@ -577,8 +550,7 @@ class Pipeline:
             known = store.list_characters(production_id)
             store.get_or_create_production(
                 title=ingested.title, author=ingested.author,
-                source=_source_label(ebook_path, audio_path, structure_path),
-                style=self.config.project.style,
+                source="audiobook", style=self.config.project.style,
             )
 
             if self.config.analysis.mode == "director" and ingested.structure is not None:
@@ -590,7 +562,7 @@ class Pipeline:
                     self._progress("  (director mode needs an audiobook structure; using scene mode)")
                 analysis = self.analyze(
                     ingested.chapters, ingested.title, ingested.author,
-                    ingested.transcript, ingested.structure,
+                    ingested.structure,
                     id_prefix=chunk_label if chunk_label != "full" else "scene",
                     known_characters=known,
                 )

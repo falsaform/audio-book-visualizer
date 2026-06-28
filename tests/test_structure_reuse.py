@@ -36,7 +36,7 @@ def test_ingest_loads_structure_without_transcribing(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline_mod, "transcribe_audio", boom)
 
     path = _structure_file(tmp_path)
-    result = Pipeline(Config()).ingest(None, None, structure_path=str(path))
+    result = Pipeline(Config()).ingest(None, structure_path=str(path))
 
     assert result.transcript is None
     assert result.structure is not None
@@ -50,7 +50,7 @@ def test_run_with_structure_reaches_analysis(tmp_path, monkeypatch):
     captured = {}
 
     def fake_analyze(
-        self, chapters, title, author, transcript, structure=None,
+        self, chapters, title, author, structure=None,
         id_prefix="scene", known_characters=None,
     ):
         captured["chapters"] = chapters

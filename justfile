@@ -55,7 +55,7 @@ clean:
 abv *args:
     {{run}} abv {{args}}
 
-# Run the full visualizer, e.g. `just visualize --ebook book.epub --audio book.m4b`
+# Run the full visualizer, e.g. `just visualize --audio book.m4b --director`
 visualize *args:
     {{run}} abv visualize {{args}}
 
@@ -69,9 +69,10 @@ segment *args:
 video *args:
     {{run}} abv video {{args}}
 
-# Offline demo on the bundled sample (stub frames, no image API; needs ANTHROPIC_API_KEY)
+# Director-mode demo on the bundled structure sample (stub frames, no image API;
+# needs ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN for the analysis crew)
 demo:
-    {{run}} abv visualize --ebook examples/sample.txt --dry-run --max-frames 4
+    {{run}} abv visualize --structure examples/sample_structure.json --director --dry-run --out output/sample
 
 # Serve the web UI (browse + regenerate frames) at http://localhost:8000
 # Pass extra args, e.g. `just web --dry-run` or `just web --out runs/moby`

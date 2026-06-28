@@ -18,12 +18,9 @@ def test_slugify():
 def test_output_dir_per_book_subfolder():
     cfg = Config()
     cfg.output.dir = "output"
-    # No --out -> subfolder from the audio/ebook stem.
+    # No --out -> subfolder from the audio stem.
     assert _resolve_output_dir(cfg, None, audio=Path("/x/Moby Dick.m4b")) == "output/moby-dick"
-    assert _resolve_output_dir(cfg, None, ebook=Path("hobbit.epub")) == "output/hobbit"
-    # ebook wins over audio.
-    got = _resolve_output_dir(cfg, None, ebook=Path("a.epub"), audio=Path("b.m4b"))
-    assert got == "output/a"
+    assert _resolve_output_dir(cfg, None, audio=Path("hobbit.mp3")) == "output/hobbit"
 
 
 def test_output_dir_explicit_out_wins():

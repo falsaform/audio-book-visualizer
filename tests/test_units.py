@@ -1,22 +1,10 @@
 """Unit tests that run without any API access."""
 
-from pathlib import Path
-
-from audiobook_visualizer.analysis.align import align_scenes
 from audiobook_visualizer.config import Config
 from audiobook_visualizer.generation.prompt_builder import build_prompt
 from audiobook_visualizer.generation.stub_provider import StubImageProvider
-from audiobook_visualizer.ingest.ebook import load_ebook
-from audiobook_visualizer.models import (
-    BookAnalysis,
-    Character,
-    Scene,
-    Transcript,
-    TranscriptSegment,
-)
+from audiobook_visualizer.models import BookAnalysis, Character, Scene
 from audiobook_visualizer.utils.llm import _parse_json
-
-EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "sample.txt"
 
 
 def test_config_defaults():
@@ -24,14 +12,6 @@ def test_config_defaults():
     assert cfg.analysis.provider == "auto"
     assert cfg.generation.provider == "auto"
     assert "16:9" in cfg.project.style
-
-
-def test_load_ebook_splits_chapters():
-    book = load_ebook(EXAMPLE)
-    titles = [c.title.lower() for c in book.chapters]
-    assert any("chapter 1" in t for t in titles)
-    assert any("chapter 2" in t for t in titles)
-    assert "Ishmael" in book.full_text
 
 
 def test_parse_json_handles_fences():
@@ -71,15 +51,3 @@ def test_stub_provider_writes_file(tmp_path):
     assert out.exists()
     assert out.suffix == ".png"
     assert out.stat().st_size > 0
-
-
-def test_align_scenes_attaches_timestamps():
-    scenes = [Scene(id="s1", source_excerpt="the green and heaving sea")]
-    transcript = Transcript(
-        segments=[
-            TranscriptSegment(start=0.0, end=5.0, text="Call me Ishmael."),
-            TranscriptSegment(start=5.0, end=10.0, text="upon a green and heaving sea"),
-        ]
-    )
-    align_scenes(scenes, transcript)
-    assert scenes[0].start_time == 5.0

@@ -1,24 +1,26 @@
 # Audiobook Visualizer
 
-Turn an **audiobook** and/or **ebook** into AI-analyzed scenes and AI-generated
-**still frames** — a visual storyboard of the book.
+Turn an **audiobook** into AI-analyzed scenes and AI-generated **still frames** —
+a visual storyboard of the book.
 
-The pipeline reads the source, uses **Claude** to build a character bible and
-identify the most visually compelling moments, then renders each moment as an
-image with a pluggable provider — **OpenAI DALL·E** or **Google Gemini 2.5 Flash
-Image** ("Nano Banana"). Characters stay consistent across frames: their
-canonical appearance is injected into every prompt, and with Gemini a generated
-character **portrait** is also passed as a reference image. Output is a folder of
-frames plus a browsable HTML gallery.
+The pipeline transcribes the audio and segments it into chapters/paragraphs with
+timestamps, uses **Claude** to build a character bible and identify the most
+visually compelling moments (or, in director mode, a screenplay + shot list), then
+renders each moment as an image with a pluggable provider — **OpenAI DALL·E** or
+**Google Gemini 2.5 Flash Image** ("Nano Banana"). Characters stay consistent
+across frames: their canonical appearance is injected into every prompt, and with
+Gemini a generated character **portrait** is also passed as a reference image.
+Output is a folder of frames plus a browsable HTML gallery, all backed by a
+per-book `production.db`.
 
 ```
  ingest                 analyze (Claude)              generate (DALL·E)
-┌────────────┐   text   ┌─────────────────────┐  ┌────────────────────┐
-│ .epub/.pdf │ ───────► │ character bible      │  │ build prompt       │
-│ .txt       │          │ scene / visual-      │► │ (+character bible) │ ► frames/*.png
-│ audiobook  │ ──┐      │   moment extraction  │  │ DALL·E image       │   gallery.html
+┌────────────┐  trans-  ┌─────────────────────┐  ┌────────────────────┐
+│ audiobook  │  cribe   │ character bible      │  │ build prompt       │
+│ (.m4b/.mp3 │ ───────► │ scene / shot         │► │ (+character bible) │ ► frames/*.png
+│  /folder)  │  + seg   │   extraction         │  │ DALL·E / Gemini    │   gallery.html
 └────────────┘   │ ts   └─────────────────────┘  └────────────────────┘   production.db
-                 └────────► align scenes to audio timestamps (optional)
+                 └────────► scenes/shots timed to the narration
 ```
 
 Characters, scenes, shots and frames are persisted to a per-book **`production.db`**
@@ -79,17 +81,20 @@ just shell      # open a shell in the container
 All commands run in the container; pass CLI flags straight through `just`:
 
 ```bash
-# Full run: ebook + audiobook -> analyzed scenes -> generated frames -> gallery
-just visualize --ebook book.epub --audio book.m4b
-
-# Audiobook-only: no ebook needed — structure is recovered from the audio
+# Full run: audiobook -> transcribe + segment -> analyzed scenes -> frames -> gallery
 just visualize --audio book.m4b
 
-# Ebook only, just the analysis (characters + scenes), no images
-just visualize --ebook book.pdf --analyze-only
+# Director mode: a crew writes a screenplay + shot list with camera moves
+just visualize --audio book.m4b --director
+
+# Just the analysis (characters + scenes), no images
+just visualize --audio book.m4b --analyze-only
 
 # Render placeholder frames without calling the image API (still calls Claude)
-just visualize --ebook book.epub --dry-run --max-frames 6
+just visualize --audio book.m4b --dry-run --max-frames 6
+
+# Try it without any audio file: the bundled structure sample (stub frames)
+just demo
 
 # Inspect the character bible from a finished run
 just abv characters output
@@ -101,7 +106,7 @@ container at `/app`) and reference them by relative path. Output lands in
 
 ### Audiobook-only mode
 
-With no ebook, the pipeline recovers structure from the audio itself —
+The pipeline recovers structure from the audio itself —
 transcribing it and segmenting into **chapters** and **paragraphs** so each
 piece can be processed (and timestamped) individually. Chapter boundaries are
 detected, in order of preference:
@@ -239,7 +244,7 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 
 | Flag | Purpose |
 |------|---------|
-| `--ebook / -e` | Path to `.pdf` / `.epub` / `.txt`. |
+| `--director` | Crew mode: screenplay + shot list with camera moves (needs audio). |
 | `--audio / -a` | Path to audiobook (`.mp3` / `.m4a` / `.m4b` / `.wav`). |
 | `--structure` | Reuse an existing `audiobook_structure.json` (skip transcription). |
 | `--analyze-only` | Stop after analysis; persist scenes to `production.db`, skip images. |
@@ -298,7 +303,7 @@ Toggle with `generation.shot_variety`.
 
 ```bash
 just visualize --audio book.m4b --provider gemini   # Nano Banana, with portraits
-just visualize --ebook book.epub --force            # rebuild every frame
+just visualize --audio book.m4b --force             # rebuild every frame
 ```
 
 ## Web UI

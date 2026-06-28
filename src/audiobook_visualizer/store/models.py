@@ -47,7 +47,7 @@ class Production(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str = ""
     author: str = ""
-    source: str = ""  # ebook | audiobook | both
+    source: str = "audiobook"
     style: str = ""  # project.style snapshot
     created_at: float = 0.0
 

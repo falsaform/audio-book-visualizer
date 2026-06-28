@@ -1,0 +1,44 @@
+{
+  "title": "Moby-Dick (sample)",
+  "source": "time",
+  "chapters": [
+    {
+      "index": 0,
+      "title": "Loomings",
+      "start": 0.0,
+      "end": 180.0,
+      "paragraphs": [
+        {
+          "index": 0,
+          "text": "Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world.",
+          "start": 0.0,
+          "end": 38.0
+        },
+        {
+          "index": 1,
+          "text": "Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul; then, I account it high time to get to sea as soon as I can.",
+          "start": 38.0,
+          "end": 74.0
+        },
+        {
+          "index": 2,
+          "text": "There now is your insular city of the Manhattoes, belted round by wharves as Indian isles by coral reefs—commerce surrounds it with her surf. Right and left, the streets take you waterward.",
+          "start": 74.0,
+          "end": 110.0
+        },
+        {
+          "index": 3,
+          "text": "Posted like silent sentinels all around the town, stand thousands upon thousands of mortal men fixed in ocean reveries. Some leaning against the spiles; some seated upon the pier-heads; looking over the bulwarks of ships from China.",
+          "start": 110.0,
+          "end": 146.0
+        },
+        {
+          "index": 4,
+          "text": "But look! here come more crowds, pacing straight for the water, and seemingly bound for a dive. Strange! Nothing will content them but the extremest limit of the land; loitering under the shady lee of yonder warehouses will not suffice.",
+          "start": 146.0,
+          "end": 180.0
+        }
+      ]
+    }
+  ]
+}

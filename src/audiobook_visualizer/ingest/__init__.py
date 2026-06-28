@@ -1,6 +1,5 @@
-"""Ingestion: turn source files (ebook, audiobook) into text and transcripts."""
+"""Ingestion: turn an audiobook into a transcript and chapter/paragraph structure."""
 
-from .ebook import load_ebook
 from .audio import (
     audio_file_boundaries,
     audio_total_duration,
@@ -10,7 +9,6 @@ from .audio import (
 from .segmentation import build_audiobook_structure, extract_chapter_markers, join_structures
 
 __all__ = [
-    "load_ebook",
     "transcribe_audio",
     "gather_audio_files",
     "audio_file_boundaries",

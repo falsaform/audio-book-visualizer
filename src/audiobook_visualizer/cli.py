@@ -1,8 +1,8 @@
 """Command-line interface.
 
-    abv visualize --ebook book.epub --audio book.m4b
-    abv visualize --ebook book.pdf --analyze-only
-    abv visualize --ebook book.txt --dry-run        # no API calls, stub frames
+    abv visualize --audio book.m4b
+    abv visualize --structure output/book/audiobook_structure_0005-20min.json --director
+    abv visualize --structure structure.json --dry-run   # no API calls, stub frames
 
 Run ``abv --help`` for all options.
 """
@@ -22,7 +22,7 @@ from .utils import slugify
 
 app = typer.Typer(
     add_completion=False,
-    help="Turn an audiobook + ebook into AI-analyzed scenes and generated still frames.",
+    help="Turn an audiobook into AI-analyzed scenes and generated still frames.",
 )
 console = Console()
 
@@ -35,13 +35,12 @@ def _resolve_output_dir(
     config: Config,
     out: Optional[Path],
     *,
-    ebook: Optional[Path] = None,
     audio: Optional[Path] = None,
     structure: Optional[Path] = None,
 ) -> str:
     """Pick the output dir: an explicit --out wins, else a per-book subfolder.
 
-    Subfolder name derives from the input file so multiple books don't collide:
+    Subfolder name derives from the audio file so multiple books don't collide:
     ``output/<book-slug>/``. When reusing a structure, output lands next to it.
     """
     if out is not None:
@@ -49,19 +48,11 @@ def _resolve_output_dir(
     if structure is not None:
         return str(Path(structure).parent)
     base = Path(config.output.dir)
-    stem = None
-    if ebook is not None:
-        stem = ebook.stem
-    elif audio is not None:
-        stem = audio.stem
-    return str(base / slugify(stem)) if stem else str(base)
+    return str(base / slugify(audio.stem)) if audio is not None else str(base)
 
 
 @app.command()
 def visualize(
-    ebook: Optional[Path] = typer.Option(
-        None, "--ebook", "-e", help="Path to .pdf/.epub/.txt ebook."
-    ),
     audio: Optional[Path] = typer.Option(
         None, "--audio", "-a", help="Audiobook file, or a folder of audio parts."
     ),
@@ -125,9 +116,7 @@ def visualize(
     config = Config.load(config_path)
 
     # Apply CLI overrides.
-    config.output.dir = _resolve_output_dir(
-        config, out, ebook=ebook, audio=audio, structure=structure
-    )
+    config.output.dir = _resolve_output_dir(config, out, audio=audio, structure=structure)
     if style is not None:
         config.project.style = style
     if max_frames is not None:
@@ -142,14 +131,13 @@ def visualize(
         config.analysis.mode = "director"
         config.crew.enabled = True
 
-    if not ebook and not audio and not structure:
-        console.print("[red]Error:[/red] provide --ebook, --audio, and/or --structure.")
+    if not audio and not structure:
+        console.print("[red]Error:[/red] provide --audio or --structure.")
         raise typer.Exit(code=2)
 
     pipeline = Pipeline(config, on_progress=_progress)
     try:
         analysis = pipeline.run(
-            ebook_path=str(ebook) if ebook else None,
             audio_path=str(audio) if audio else None,
             structure_path=str(structure) if structure else None,
             analyze_only=analyze_only,
