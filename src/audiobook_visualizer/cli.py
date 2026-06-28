@@ -340,31 +340,58 @@ def video(
     dir: Optional[Path] = typer.Option(
         None, "--dir", "-d", help="Book output dir with rendered frames (default: config output)."
     ),
-    out: Optional[Path] = typer.Option(
-        None, "--out", "-o", help="Output mp4 path (default: <dir>/video.mp4)."
-    ),
     config_path: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to config.yaml."),
     fps: int = typer.Option(24, "--fps", help="Output frame rate."),
 ):
-    """Compile generated frames + audio into a timed video (mp4).
+    """Compile generated frames + audio into timed videos (mp4).
 
-    Each frame is shown during its scene's time span, synced to the audio (one
-    m4b or a folder of mp3s). Run `visualize` first so frames have timestamps.
+    Renders one video per rendered chunk (each covering only its own time
+    window), then a master joining them. Run `visualize` first so frames have
+    timestamps. Audio may be one m4b or a folder of mp3s.
     """
-    from .video import compile_video
+    from rich.progress import (
+        BarColumn,
+        Progress,
+        TaskProgressColumn,
+        TextColumn,
+        TimeRemainingColumn,
+    )
+
+    from .video import compile_videos
 
     load_env()
     config = Config.load(config_path)
     book_dir = dir if dir is not None else Path(config.output.dir)
-    out_path = out if out is not None else (book_dir / "video.mp4")
 
     try:
-        result = compile_video(book_dir, str(audio), out_path, fps=fps, on_progress=_progress)
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TextColumn("•"),
+            TimeRemainingColumn(),
+            TextColumn("left"),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("Encoding", total=None)
+
+            def on_progress(done: float, total: float) -> None:
+                progress.update(task, total=total or None, completed=done)
+
+            def on_log(msg: str) -> None:
+                progress.console.print(f"[dim]·[/dim] {msg}")
+                progress.reset(task)  # new segment -> reset the bar
+
+            segments, master = compile_videos(
+                book_dir, str(audio), fps=fps, on_log=on_log, on_progress=on_progress
+            )
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]Video compilation failed:[/red] {exc}")
         raise typer.Exit(code=1)
 
-    console.print(f"[green]✓[/green] Wrote video -> [underline]{result}[/underline]")
+    console.print(f"[green]✓[/green] {len(segments)} segment video(s)")
+    console.print(f"  Master: [underline]{master}[/underline]")
 
 
 def _transcribe_with_progress(

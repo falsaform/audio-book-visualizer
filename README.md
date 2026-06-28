@@ -314,18 +314,22 @@ Docker) install the extra: `pip install -e '.[web]'`.
 
 ## Video
 
-Compile the rendered frames + the audiobook into a timed **mp4** — each frame is
-shown during its scene's time span, synced to the audio:
+Compile rendered frames + the audiobook into timed **mp4s**. Each rendered chunk
+becomes its **own segment video** covering only that chunk's time window (its
+frames placed at their timestamps, with the matching slice of audio); then a
+**master** joins all segments:
 
 ```bash
-just video --audio book.m4b --dir output/legion           # -> output/legion/video.mp4
-just video --audio "audiobooks/Moby Dick/" --dir output/moby-dick -o moby.mp4
+just video --audio book.m4b --dir output/legion       # -> output/legion/<chunk>/video.mp4 (each)
+                                                       #  + output/legion/video.mp4 (master)
+just video --audio "audiobooks/Moby Dick/" --dir output/moby-dick
 ```
 
-It gathers every chunk's frames and their scene timestamps under `--dir`, orders
-them by time, and muxes against the audio (a single `.m4b` or a folder of `.mp3`
-parts — the parts are concatenated on the same timeline the timestamps live on).
-Run `visualize` first so frames have timestamps; needs `ffmpeg` (in the image).
+Each segment's window comes from its chunk folder name (e.g. `0000-60min`), so a
+single rendered hour produces a one-hour video — not the frames stretched across
+the whole book. Audio may be a single `.m4b` or a folder of `.mp3` parts (each
+segment seeks its window out of the shared timeline). A **progress bar** tracks
+each encode. Run `visualize` first so frames have timestamps; needs `ffmpeg`.
 
 Everything has sane defaults. To tune, copy `config.example.yaml` to
 `config.yaml` (auto-discovered) and edit. Highlights:

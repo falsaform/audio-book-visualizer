@@ -1,25 +1,32 @@
-"""Compile generated frames + the audiobook into a timed video.
+"""Compile generated frames + the audiobook into timed videos.
 
-Each frame is shown from its scene's start time until the next frame's start,
-synced to the audio. Works whether the audio is one file (e.g. ``.m4b``) or a
-folder of parts (``.mp3``) — the parts are concatenated on the same timeline the
-scene timestamps live on. Uses ffmpeg's concat demuxer; nothing is held in
-memory.
+Each rendered chunk becomes its **own** segment video covering only that chunk's
+time window (its frames placed at their timestamps, with the matching slice of
+audio). A **master** video then concatenates the segments. Works whether the
+audio is one file (``.m4b``) or a folder of parts (``.mp3``) — the parts share
+one timeline, and each segment seeks its window out of it. Uses ffmpeg's concat
+demuxer; nothing is held in memory, and encode progress is reported live.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 from .ingest import audio_total_duration, gather_audio_files
 from .models import BookAnalysis
 
-ProgressFn = Callable[[str], None]
+LogFn = Callable[[str], None]
+ProgressFn = Callable[[float, float], None]  # (seconds_done, seconds_total)
+
+_WINDOW_RE = re.compile(r"(\d+)-(\d+)min")
+_WINDOW_END_RE = re.compile(r"(\d+)-endmin")
 
 
 @dataclass
@@ -29,131 +36,235 @@ class FrameCue:
     end: float
 
 
-def collect_frames(book_dir: str | Path) -> list[FrameCue]:
-    """Gather timestamped frames across a book dir (all chunks), ordered by time.
+@dataclass
+class Segment:
+    chunk_dir: Path
+    label: str
+    start: float
+    end: float
+    cues: list[FrameCue] = field(default_factory=list)
 
-    Reads every ``analysis.json`` under ``book_dir`` (joining each with its
-    sibling ``manifest.json``) and keeps scenes that were rendered and aligned.
+    @property
+    def duration(self) -> float:
+        return max(0.0, self.end - self.start)
+
+
+# -- discovery ---------------------------------------------------------------
+
+
+def collect_segments(book_dir: str | Path, total_audio: float = 0.0) -> list[Segment]:
+    """One :class:`Segment` per rendered chunk, with its time window and frames.
+
+    The window comes from the chunk folder name when it encodes one (e.g.
+    ``0000-60min``); otherwise it falls back to the span of the chunk's frames.
     """
-    import json
-
     book_dir = Path(book_dir)
-    cues: list[FrameCue] = []
-    seen: set[str] = set()
+    segments: list[Segment] = []
 
     for analysis_path in sorted(book_dir.rglob("analysis.json")):
-        try:
-            analysis = BookAnalysis.model_validate_json(analysis_path.read_text())
-        except (OSError, ValueError):
+        cues = _chunk_cues(analysis_path)
+        if not cues:
             continue
-        manifest_path = analysis_path.parent / "manifest.json"
-        frames_by_id: dict[str, dict] = {}
-        if manifest_path.exists():
-            try:
-                frames_by_id = {
-                    f["scene_id"]: f for f in json.loads(manifest_path.read_text())
-                }
-            except (OSError, ValueError, KeyError):
-                frames_by_id = {}
+        chunk_dir = analysis_path.parent
+        label = chunk_dir.name if chunk_dir != book_dir else "full"
+        start, end = _window(chunk_dir.name, cues, total_audio)
+        segments.append(Segment(chunk_dir, label, start, end, cues))
 
-        for scene in analysis.scenes:
-            if scene.start_time is None or scene.id in seen:
-                continue
-            frame = frames_by_id.get(scene.id)
-            if not frame or not frame.get("image_path") or frame.get("error"):
-                continue
-            img = _resolve_image(frame["image_path"], analysis_path.parent, scene.id)
-            if img is None:
-                continue
-            seen.add(scene.id)
-            cues.append(
-                FrameCue(image=img, start=scene.start_time, end=scene.end_time or scene.start_time)
-            )
+    segments.sort(key=lambda s: s.start)
+    return segments
 
+
+def _chunk_cues(analysis_path: Path) -> list[FrameCue]:
+    try:
+        analysis = BookAnalysis.model_validate_json(analysis_path.read_text())
+    except (OSError, ValueError):
+        return []
+    manifest_path = analysis_path.parent / "manifest.json"
+    frames_by_id: dict[str, dict] = {}
+    if manifest_path.exists():
+        try:
+            frames_by_id = {f["scene_id"]: f for f in json.loads(manifest_path.read_text())}
+        except (OSError, ValueError, KeyError):
+            frames_by_id = {}
+
+    cues: list[FrameCue] = []
+    for scene in analysis.scenes:
+        if scene.start_time is None:
+            continue
+        frame = frames_by_id.get(scene.id)
+        if not frame or not frame.get("image_path") or frame.get("error"):
+            continue
+        img = _resolve_image(frame["image_path"], analysis_path.parent, scene.id)
+        if img is None:
+            continue
+        cues.append(FrameCue(img, scene.start_time, scene.end_time or scene.start_time))
     cues.sort(key=lambda c: c.start)
     return cues
 
 
+def _window(name: str, cues: list[FrameCue], total_audio: float) -> tuple[float, float]:
+    """Time window for a chunk: from its folder name, else its frame span."""
+    if m := _WINDOW_RE.search(name):
+        return float(m.group(1)) * 60.0, float(m.group(2)) * 60.0
+    if m := _WINDOW_END_RE.search(name):
+        start = float(m.group(1)) * 60.0
+        return start, (total_audio if total_audio else max(c.end for c in cues))
+    # Fall back to the span the frames cover.
+    start = min(c.start for c in cues)
+    end = max(c.end for c in cues)
+    if total_audio:
+        end = min(end, total_audio)
+    return start, end
+
+
 def _resolve_image(image_path: str, chunk_dir: Path, scene_id: str) -> Optional[Path]:
-    candidates = [
+    for cand in (
         Path(image_path),
         chunk_dir / "frames" / Path(image_path).name,
         chunk_dir / "frames" / f"{scene_id}.png",
-    ]
-    for cand in candidates:
+    ):
         if cand.exists():
             return cand.resolve()
     return None
 
 
-def compile_video(
+# -- compilation -------------------------------------------------------------
+
+
+def compile_videos(
     book_dir: str | Path,
     audio: str | Path,
-    out_path: str | Path,
     fps: int = 24,
+    on_log: Optional[LogFn] = None,
     on_progress: Optional[ProgressFn] = None,
-) -> Path:
-    """Render frames + audio to an mp4. Returns the output path."""
-    progress = on_progress or (lambda _m: None)
+) -> tuple[list[Path], Optional[Path]]:
+    """Render one video per chunk + a master joining them. Returns (segments, master)."""
+    log = on_log or (lambda _m: None)
     if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
         raise RuntimeError("Compiling video requires ffmpeg/ffprobe.")
 
-    cues = collect_frames(book_dir)
-    if not cues:
+    book_dir = Path(book_dir)
+    audio_files = gather_audio_files(audio)
+    total_audio = audio_total_duration(audio)
+
+    segments = collect_segments(book_dir, total_audio)
+    if not segments:
         raise ValueError(
             "No timestamped frames found to compile. Run `visualize` first "
             "(frames need scene timestamps from an aligned audiobook)."
         )
+    log(f"{len(segments)} segment(s) with frames")
 
-    audio_files = gather_audio_files(audio)
-    total = audio_total_duration(audio)
-    if total <= 0:
-        # Fall back to the last cue if the audio duration can't be probed.
-        total = max(c.end for c in cues)
-    progress(f"{len(cues)} frame(s) over {total / 60:.1f} min of audio")
+    outputs: list[Path] = []
+    for seg in segments:
+        out = seg.chunk_dir / "video.mp4"
+        log(
+            f"Segment {seg.label}: {len(seg.cues)} frame(s), "
+            f"{_fmt(seg.start)}–{_fmt(seg.end)} ({seg.duration / 60:.1f} min)"
+        )
+        _render_segment(seg, audio_files, fps, out, on_progress)
+        outputs.append(out)
 
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Master: concat the segment videos. If the only segment already lives at the
+    # book dir, it is the result.
+    if len(outputs) == 1 and segments[0].chunk_dir == book_dir:
+        return outputs, outputs[0]
+    master = book_dir / "video.mp4"
+    log(f"Joining {len(outputs)} segment(s) -> master")
+    _concat_videos(outputs, master)
+    return outputs, master
 
+
+def _render_segment(
+    seg: Segment, audio_files: list[Path], fps: int, out: Path, on_progress: Optional[ProgressFn]
+) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    win = seg.duration
     with tempfile.TemporaryDirectory(prefix="abv-video-") as workdir:
         wd = Path(workdir)
         frames_txt = wd / "frames.txt"
-        frames_txt.write_text(_frames_concat(cues, total), encoding="utf-8")
+        frames_txt.write_text(_frames_concat(seg.cues, seg.start, seg.end), encoding="utf-8")
         audio_txt = wd / "audio.txt"
         audio_txt.write_text(_audio_concat(audio_files), encoding="utf-8")
 
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-progress", "pipe:1", "-nostats",
             "-f", "concat", "-safe", "0", "-i", str(frames_txt),
+            "-ss", f"{seg.start:.3f}", "-t", f"{win:.3f}",
             "-f", "concat", "-safe", "0", "-i", str(audio_txt),
             "-map", "0:v", "-map", "1:a",
             "-r", str(fps), "-pix_fmt", "yuv420p", "-c:v", "libx264",
             "-c:a", "aac", "-b:a", "192k",
             "-shortest", "-movflags", "+faststart",
-            str(out_path),
+            str(out),
         ]
-        progress("Encoding video (ffmpeg)…")
-        subprocess.run(cmd, check=True)
-    return out_path
+        _run_ffmpeg(cmd, win, on_progress)
 
 
-def _frames_concat(cues: list[FrameCue], total: float) -> str:
-    """ffconcat script: hold each image until the next cue's start (then audio end)."""
-    # The first image covers the lead-in from 0; each subsequent image starts at
-    # its scene time.
-    starts = [0.0] + [c.start for c in cues[1:]]
+def _concat_videos(segment_paths: list[Path], out: Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="abv-video-") as workdir:
+        list_txt = Path(workdir) / "segments.txt"
+        list_txt.write_text(
+            "ffconcat version 1.0\n"
+            + "\n".join(f"file '{Path(p).resolve().as_posix()}'" for p in segment_paths)
+            + "\n",
+            encoding="utf-8",
+        )
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0", "-i", str(list_txt),
+            "-c", "copy", "-movflags", "+faststart", str(out),
+        ]
+        _run_ffmpeg(cmd, 0.0, None)
+
+
+def _run_ffmpeg(cmd: list[str], total: float, on_progress: Optional[ProgressFn]) -> None:
+    """Run ffmpeg, streaming `-progress` output to ``on_progress``."""
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if proc.stdout is not None:
+        for line in proc.stdout:
+            if on_progress and total and line.startswith("out_time_us="):
+                try:
+                    secs = int(line.split("=", 1)[1]) / 1_000_000
+                    on_progress(min(secs, total), total)
+                except ValueError:
+                    pass
+    proc.wait()
+    if proc.returncode != 0:
+        err = proc.stderr.read() if proc.stderr else ""
+        raise RuntimeError(f"ffmpeg failed (exit {proc.returncode}): {err.strip()[:500]}")
+    if on_progress and total:
+        on_progress(total, total)
+
+
+# -- concat scripts ----------------------------------------------------------
+
+
+def _frames_concat(cues: list[FrameCue], w_start: float, w_end: float) -> str:
+    """ffconcat: each image held until the next cue (timeline relative to window)."""
+    win = max(0.0, w_end - w_start)
+    starts = [0.0] + [max(0.0, c.start - w_start) for c in cues[1:]]
     lines = ["ffconcat version 1.0"]
     for i, cue in enumerate(cues):
-        seg_end = starts[i + 1] if i + 1 < len(cues) else total
+        seg_end = starts[i + 1] if i + 1 < len(cues) else win
         duration = max(0.05, seg_end - starts[i])
         lines.append(f"file '{cue.image.as_posix()}'")
         lines.append(f"duration {duration:.3f}")
-    # concat demuxer ignores the final entry's duration unless the file repeats.
-    lines.append(f"file '{cues[-1].image.as_posix()}'")
+    lines.append(f"file '{cues[-1].image.as_posix()}'")  # repeat last for the demuxer
     return "\n".join(lines) + "\n"
 
 
 def _audio_concat(files: list[Path]) -> str:
-    lines = ["ffconcat version 1.0"]
-    lines += [f"file '{Path(f).resolve().as_posix()}'" for f in files]
-    return "\n".join(lines) + "\n"
+    return (
+        "ffconcat version 1.0\n"
+        + "\n".join(f"file '{Path(f).resolve().as_posix()}'" for f in files)
+        + "\n"
+    )
+
+
+def _fmt(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
