@@ -34,6 +34,11 @@ class AudioConfig(BaseModel):
     backend: str = "faster-whisper"  # or "openai"
     model: str = "base"
     align_to_ebook: bool = True
+    # Stream long audio through ffmpeg into on-disk chunks of this many seconds
+    # and transcribe them one at a time, so memory stays bounded regardless of
+    # book length. 0 disables chunking (loads the whole file — only for tiny
+    # inputs). Files shorter than this are transcribed in one pass.
+    chunk_seconds: int = 600
     # Audiobook-only segmentation (used when no ebook is supplied).
     segment: bool = True
     chapter_mode: str = "auto"  # auto | markers | headings | time | single

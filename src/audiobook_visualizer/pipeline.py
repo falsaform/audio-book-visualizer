@@ -65,6 +65,7 @@ class Pipeline:
                 backend=self.config.audio.backend,
                 model=self.config.audio.model,
                 on_progress=self._transcription_progress(),
+                chunk_seconds=self.config.audio.chunk_seconds,
             )
             self._progress(f"  {len(result.transcript.segments)} transcript segment(s)")
 

@@ -200,6 +200,7 @@ def _transcribe_with_progress(audio: Path, config: Config):
             backend=config.audio.backend,
             model=config.audio.model,
             on_progress=on_progress,
+            chunk_seconds=config.audio.chunk_seconds,
         )
 
 

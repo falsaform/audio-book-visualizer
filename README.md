@@ -99,6 +99,13 @@ Transcription is the slow step, so `segment` shows a live **progress bar** that
 advances with the audio position (with elapsed/remaining time). `visualize`
 reports the same progress as throttled percentage lines.
 
+**Long audiobooks (12h+) stay memory-safe.** Rather than decoding the whole file
+into RAM, the audio is streamed through ffmpeg into small on-disk chunks
+(`audio.chunk_seconds`, default 600s), transcribed one at a time, and stitched
+back together with running timestamps. Peak memory and temp disk are bounded to a
+single chunk regardless of book length. Set `chunk_seconds: 0` to disable (only
+for tiny inputs).
+
 `audiobook_structure.json` contains every chapter and paragraph with its audio
 start/end times. A full `visualize` run on an audiobook writes the same file
 alongside `analysis.json`.

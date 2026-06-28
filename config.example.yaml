@@ -20,6 +20,10 @@ audio:
   backend: faster-whisper         # "faster-whisper" (local) or "openai"
   model: base                     # whisper model size (tiny/base/small/medium/large-v3)
   align_to_ebook: true            # attach audio timestamps to scenes when possible
+  chunk_seconds: 600              # stream audio through ffmpeg into N-second
+                                  # chunks and transcribe one at a time, so memory
+                                  # stays bounded on very long (12h+) audiobooks.
+                                  # 0 disables (loads whole file — tiny inputs only)
   # Audiobook-only mode: when no ebook is supplied, recover structure from audio.
   segment: true                   # segment into chapters + paragraphs
   chapter_mode: auto              # auto | markers | headings | time | single

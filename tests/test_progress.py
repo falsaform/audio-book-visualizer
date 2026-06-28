@@ -35,7 +35,7 @@ def test_on_progress_flows_through_transcribe_backend(monkeypatch):
 
     seen: list[tuple[float, float]] = []
 
-    def fake_local(path, model, on_progress=None):
+    def fake_local(path, model, on_progress, total, chunk_seconds):
         if on_progress:
             on_progress(10.0, 20.0)
             on_progress(20.0, 20.0)
