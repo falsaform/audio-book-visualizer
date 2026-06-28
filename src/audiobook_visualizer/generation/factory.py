@@ -55,7 +55,7 @@ def get_provider(config: GenerationConfig, dry_run: bool = False) -> ImageProvid
         # The shared `model` default is a DALL-E id; pick a Gemini model unless
         # the user explicitly set a gemini-* model.
         model = config.model if "gemini" in config.model.lower() else ""
-        return GeminiImageProvider(model=model)
+        return GeminiImageProvider(model=model, size=config.size)
     if provider == "stub":
         return StubImageProvider(size=config.size)
     raise ValueError(

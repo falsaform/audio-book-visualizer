@@ -49,9 +49,13 @@ def test_run_with_structure_reaches_analysis(tmp_path, monkeypatch):
     # Stub analysis so no API is needed; assert it receives the loaded structure.
     captured = {}
 
-    def fake_analyze(self, chapters, title, author, transcript, structure=None):
+    def fake_analyze(
+        self, chapters, title, author, transcript, structure=None,
+        id_prefix="scene", known_characters=None,
+    ):
         captured["chapters"] = chapters
         captured["structure"] = structure
+        captured["id_prefix"] = id_prefix
         from audiobook_visualizer.models import BookAnalysis
         return BookAnalysis(title=title, scenes=[])
 

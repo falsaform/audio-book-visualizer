@@ -10,6 +10,7 @@ one frame doesn't abort the rest.
 from __future__ import annotations
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,13 +27,47 @@ from .ingest import (
     load_ebook,
     transcribe_audio,
 )
-from .models import AudiobookStructure, BookAnalysis, Frame, Scene, Transcript
+from .models import (
+    AudiobookStructure,
+    BookAnalysis,
+    Character,
+    Frame,
+    Scene,
+    Transcript,
+)
 
 ProgressFn = Callable[[str], None]
+
+_CHARACTERS_FILE = "characters.json"
 
 
 def _slug(name: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in name.strip().lower()).strip("_") or "x"
+
+
+def _chunk_label(structure_path: str) -> str:
+    """A stable per-chunk label from a structure filename (for ids + subfolders)."""
+    stem = Path(structure_path).stem
+    label = re.sub(r"^audiobook_structure_?", "", stem)
+    return label or "full"
+
+
+def _load_characters(book_dir: Path) -> list[Character]:
+    """Load the accumulated character bible shared across chunks (if any)."""
+    path = book_dir / _CHARACTERS_FILE
+    if not path.exists():
+        return []
+    try:
+        return [Character.model_validate(c) for c in json.loads(path.read_text())]
+    except (json.JSONDecodeError, OSError, ValueError):
+        return []
+
+
+def _save_characters(book_dir: Path, characters: list[Character]) -> None:
+    book_dir.mkdir(parents=True, exist_ok=True)
+    (book_dir / _CHARACTERS_FILE).write_text(
+        json.dumps([c.model_dump() for c in characters], indent=2), encoding="utf-8"
+    )
 
 
 def _scene_references(
@@ -165,9 +200,14 @@ class Pipeline:
         author: str,
         transcript: Optional[Transcript],
         structure: Optional[AudiobookStructure] = None,
+        id_prefix: str = "scene",
+        known_characters: Optional[list[Character]] = None,
     ) -> BookAnalysis:
         analyzer = Analyzer(self.config.analysis, on_progress=self._progress)
-        analysis = analyzer.analyze(chapters, title=title, author=author)
+        analysis = analyzer.analyze(
+            chapters, title=title, author=author,
+            id_prefix=id_prefix, known_characters=known_characters,
+        )
 
         if structure is not None:
             # Audiobook-only: exact timestamps straight from source paragraphs.
@@ -183,9 +223,14 @@ class Pipeline:
         self,
         analysis: BookAnalysis,
         out_dir: Path,
+        book_dir: Optional[Path] = None,
         dry_run: bool = False,
         force: bool = False,
     ) -> list[Frame]:
+        # Portraits (and the character bible) are shared at the book level so
+        # they're cached/reused across separately-rendered chunks; frames are
+        # per-chunk under out_dir.
+        book_dir = Path(book_dir) if book_dir is not None else Path(out_dir)
         gen_cfg = self.config.generation
         provider = get_provider(gen_cfg, dry_run=dry_run)
         frames_dir = out_dir / "frames"
@@ -200,7 +245,7 @@ class Pipeline:
         portraits: dict[str, Path] = {}
         if gen_cfg.character_portraits and provider.supports_references:
             needed = {m.lower() for s in scenes for m in s.characters_present}
-            portraits = self._generate_portraits(analysis, provider, out_dir, force, needed)
+            portraits = self._generate_portraits(analysis, provider, book_dir, force, needed)
 
         self._progress(
             f"Generating {len(scenes)} frame(s) via "
@@ -248,10 +293,15 @@ class Pipeline:
         return frames
 
     def _generate_portraits(
-        self, analysis: BookAnalysis, provider, out_dir: Path, force: bool, needed: set[str]
+        self, analysis: BookAnalysis, provider, book_dir: Path, force: bool, needed: set[str]
     ) -> dict[str, Path]:
-        """Render one reference portrait per described character that appears."""
-        portraits_dir = out_dir / "portraits"
+        """Render one reference portrait per described character that appears.
+
+        Portraits are keyed by an appearance hash, so an unchanged look is reused
+        across chunks (cached) while a changed look produces a new portrait —
+        supporting characters whose appearance evolves over the book.
+        """
+        portraits_dir = book_dir / "portraits"
         portraits_dir.mkdir(parents=True, exist_ok=True)
 
         def appears(char) -> bool:
@@ -266,10 +316,12 @@ class Pipeline:
         out: dict[str, Path] = {}
         for char in characters:
             prompt = build_portrait_prompt(char, self.config.project.style)
-            path = portraits_dir / f"{_slug(char.name)}.png"
             key = cache.compute_key(
                 {"prompt": prompt, "provider": provider.name, "model": provider.model}
             )
+            # Appearance hash in the filename: same look -> same file (shared and
+            # cached across chunks); changed look -> a new portrait.
+            path = portraits_dir / f"{_slug(char.name)}_{key[:8]}.png"
             try:
                 if self.config.generation.cache and not force and cache.is_cached(path, key):
                     pass  # reuse the existing portrait
@@ -369,37 +421,47 @@ class Pipeline:
         dry_run: bool = False,
         force: bool = False,
     ) -> BookAnalysis:
-        out_dir = Path(self.config.output.dir)
+        # book_dir holds shared, accumulating state (character bible + portraits);
+        # out_dir is per-chunk (analysis, frames, manifest, gallery) so separately
+        # rendered chunks don't overwrite each other.
+        book_dir = Path(self.config.output.dir)
+        chunk_label = _chunk_label(structure_path) if structure_path else None
+        out_dir = (book_dir / chunk_label) if chunk_label else book_dir
+        book_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         ingested = self.ingest(ebook_path, audio_path, structure_path)
 
-        # Persist the audiobook segmentation so each chapter/paragraph (with its
-        # timestamps) can be inspected or processed individually.
-        if ingested.structure is not None:
-            structure_out = out_dir / "audiobook_structure.json"
+        if ingested.structure is not None and not structure_path:
+            # Freshly segmented (not reusing a structure): persist it at book level.
+            structure_out = book_dir / "audiobook_structure.json"
             structure_out.write_text(
                 ingested.structure.model_dump_json(indent=2), encoding="utf-8"
             )
             self._progress(f"Wrote audiobook structure -> {structure_out}")
 
+        # Continuity: seed analysis with the accumulated character bible.
+        known = _load_characters(book_dir)
         analysis = self.analyze(
             ingested.chapters,
             ingested.title,
             ingested.author,
             ingested.transcript,
             ingested.structure,
+            id_prefix=chunk_label or "scene",
+            known_characters=known,
         )
 
-        # Always persist the analysis so it can be inspected or reused.
+        # Persist per-chunk analysis and update the shared character bible.
         analysis_path = out_dir / "analysis.json"
         analysis_path.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
         self._progress(f"Wrote analysis -> {analysis_path}")
+        _save_characters(book_dir, analysis.characters)
 
         if analyze_only:
             return analysis
 
-        frames = self.generate(analysis, out_dir, dry_run=dry_run, force=force)
+        frames = self.generate(analysis, out_dir, book_dir=book_dir, dry_run=dry_run, force=force)
 
         manifest_path = out_dir / "manifest.json"
         manifest_path.write_text(

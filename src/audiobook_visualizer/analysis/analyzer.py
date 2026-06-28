@@ -44,15 +44,22 @@ class Analyzer:
         chapters: list[tuple[str, str]],
         title: str = "",
         author: str = "",
+        id_prefix: str = "scene",
+        known_characters: Optional[list[Character]] = None,
     ) -> BookAnalysis:
-        """Analyze a book given a list of ``(chapter_title, chapter_text)``."""
+        """Analyze a book given a list of ``(chapter_title, chapter_text)``.
+
+        ``id_prefix`` namespaces scene ids so chunks processed separately don't
+        collide. ``known_characters`` seeds the bible from a previous chunk so
+        recurring characters stay consistent (and the bible accumulates).
+        """
         chunks = self._chunk(chapters)
         self._progress(f"Analyzing {len(chunks)} text chunk(s)")
 
-        characters = self._build_character_bible(chunks)
+        characters = self._build_character_bible(chunks, known_characters)
         self._progress(f"Identified {len(characters)} character(s)")
 
-        scenes = self._extract_scenes(chunks, characters)
+        scenes = self._extract_scenes(chunks, characters, id_prefix)
         self._progress(f"Extracted {len(scenes)} scene(s)")
 
         return BookAnalysis(
@@ -85,8 +92,16 @@ class Analyzer:
 
     # -- characters ---------------------------------------------------------
 
-    def _build_character_bible(self, chunks: list[tuple[str, str]]) -> list[Character]:
+    def _build_character_bible(
+        self,
+        chunks: list[tuple[str, str]],
+        known_characters: Optional[list[Character]] = None,
+    ) -> list[Character]:
         partial_lists: list[list[dict]] = []
+        # Seed with the accumulated bible so recurring characters carry over and
+        # are merged/updated (continuity across separately-processed chunks).
+        if known_characters:
+            partial_lists.append([c.model_dump() for c in known_characters])
         for i, (_title, text) in enumerate(chunks, 1):
             self._progress(f"Extracting characters from chunk {i}/{len(chunks)}")
             try:
@@ -129,7 +144,10 @@ class Analyzer:
     # -- scenes -------------------------------------------------------------
 
     def _extract_scenes(
-        self, chunks: list[tuple[str, str]], characters: list[Character]
+        self,
+        chunks: list[tuple[str, str]],
+        characters: list[Character],
+        id_prefix: str = "scene",
     ) -> list[Scene]:
         char_summary = _character_summary(characters)
         scenes: list[Scene] = []
@@ -156,7 +174,7 @@ class Analyzer:
                     continue
                 scenes.append(
                     Scene(
-                        id=f"scene_{i:03d}_{j:02d}",
+                        id=f"{id_prefix}_{i:03d}_{j:02d}",
                         chapter=chap_title or None,
                         title=str(item.get("title", "")).strip(),
                         summary=str(item.get("summary", "")).strip(),

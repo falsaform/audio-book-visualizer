@@ -30,11 +30,12 @@ class GeminiImageProvider(ImageProvider):
     name = "gemini"
     supports_references = True
 
-    def __init__(self, model: str = _DEFAULT_MODEL) -> None:
+    def __init__(self, model: str = _DEFAULT_MODEL, size: str = "1792x1024") -> None:
         # Imported lazily so the package imports without the SDK installed.
         from google import genai
 
         self.model = model or _DEFAULT_MODEL
+        self.size = size  # Nano Banana returns square; we fit to this (widescreen).
         # The SDK also reads GEMINI_API_KEY/GOOGLE_API_KEY from the environment,
         # but we pass it explicitly for a clear error when it's missing.
         self._client = genai.Client(api_key=require_env("GEMINI_API_KEY"))
@@ -69,7 +70,7 @@ class GeminiImageProvider(ImageProvider):
                     raise RuntimeError(
                         "Gemini returned no image (possibly blocked by safety filters)."
                     )
-                out_path.write_bytes(data)
+                out_path.write_bytes(_fit_to_size(data, self.size))
                 return out_path
             except Exception as exc:  # noqa: BLE001 - classify then retry/abort
                 if _is_quota_error(exc):
@@ -83,6 +84,38 @@ class GeminiImageProvider(ImageProvider):
                     raise
                 time.sleep(2.0 ** attempt)  # transient error: brief backoff
         raise RuntimeError("Gemini generation failed.")  # pragma: no cover
+
+
+def _fit_to_size(data: bytes, size: str) -> bytes:
+    """Center-crop to the target aspect ratio and resize to ``WxH`` (widescreen).
+
+    Nano Banana returns square images; this makes frames a consistent widescreen
+    size. Falls back to the raw bytes if they aren't a decodable image.
+    """
+    try:
+        import io
+
+        from PIL import Image
+
+        w, h = (int(x) for x in size.lower().split("x"))
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        target = w / h
+        sw, sh = img.size
+        src = sw / sh
+        if src > target:  # too wide -> crop sides
+            new_w = int(round(sh * target))
+            left = (sw - new_w) // 2
+            img = img.crop((left, 0, left + new_w, sh))
+        elif src < target:  # too tall -> crop top/bottom
+            new_h = int(round(sw / target))
+            top = (sh - new_h) // 2
+            img = img.crop((0, top, sw, top + new_h))
+        img = img.resize((w, h), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001 - never fail generation over post-processing
+        return data
 
 
 # -- error classification ----------------------------------------------------

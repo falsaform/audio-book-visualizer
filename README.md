@@ -175,6 +175,31 @@ This is the fast path for long books (transcribe once, then iterate on analysis
 and frames), and it pairs with the preview window: segment a 10-minute slice,
 then `visualize --structure` it for a quick end-to-end preview.
 
+### Rendering chunks incrementally (no overwrite, shared characters)
+
+You can render a long book in pieces and accumulate the results. Each structure
+file renders into **its own subfolder** (named from the structure filename), so
+chunks never overwrite each other — while the **character bible and portraits are
+shared at the book level** and reused across chunks:
+
+```bash
+just visualize --structure output/legion/audiobook_structure_0000-5min.json
+just visualize --structure output/legion/audiobook_structure_0005-20min.json
+```
+```
+output/legion/
+  characters.json            # accumulating character bible (shared)
+  portraits/<name>_<hash>.png  # reference portraits, cached & shared
+  0000-5min/                 # chunk: analysis.json, frames/, manifest.json, gallery.html
+  0005-20min/
+```
+
+- **Continuity:** each chunk seeds analysis with the accumulated `characters.json`,
+  so recurring characters stay consistent (and scene ids are namespaced per chunk).
+- **Caching across chunks:** portraits are keyed by an appearance hash. The same
+  look is reused (no re-generation, no wasted quota); a character whose look
+  *changes* over the book gets a new portrait — so evolving appearances are kept.
+
 ### Claude Code in the container
 
 The image ships the [Claude Code](https://claude.com/claude-code) CLI. Authenticate
@@ -287,13 +312,19 @@ Everything has sane defaults. To tune, copy `config.example.yaml` to
 
 Each input gets its **own subfolder** so multiple books don't collide:
 `output/<book-slug>/` (the slug comes from the input filename). Pass `--out` to
-override; reusing a structure with `--structure` writes next to that file. A run
-writes:
+override. When rendering chunks via `--structure`, each chunk gets its own
+subfolder under the book dir (see [above](#rendering-chunks-incrementally-no-overwrite-shared-characters)).
 
-- `analysis.json` — characters + scenes (the structured analysis).
-- `audiobook_structure.json` — chapters + paragraphs with audio timestamps (audiobook-only mode).
-- `frames/*.png` (+ `*.json` cache sidecars) — one image per scene.
-- `portraits/*.png` — per-character reference portraits (reference-capable providers).
+Book level (shared across chunks):
+
+- `characters.json` — the accumulating character bible.
+- `portraits/<name>_<hash>.png` — reference portraits, cached by appearance.
+- `audiobook_structure.json` — chapters + paragraphs with audio timestamps.
+
+Per run / per chunk:
+
+- `analysis.json` — characters + scenes for that chunk.
+- `frames/*.png` (+ `*.json` cache sidecars) — one image per scene (widescreen).
 - `manifest.json` — each frame's prompt, provider, references and resulting file.
 - `gallery.html` — a self-contained gallery to browse the frames.
 

@@ -87,8 +87,9 @@ def test_portraits_generated_and_referenced(tmp_path: Path):
     # who is in no rendered scene.
     portraits = list((tmp_path / "portraits").glob("*.png"))
     names = {p.stem for p in portraits}
-    assert "ahab" in names
-    assert "ishmael" not in names
+    # Filenames are slug + appearance hash, e.g. "ahab_a1b2c3d4".
+    assert any(n.startswith("ahab_") for n in names)
+    assert not any(n.startswith("ishmael") for n in names)
     # The scene's frame records the portrait as a reference.
     assert frames[0].references and "ahab" in frames[0].references[0]
 
@@ -178,6 +179,22 @@ def test_resolve_provider_auto_no_keys_errors(monkeypatch):
         _resolve_provider("auto", "dall-e-3")
 
 
+def test_gemini_fit_to_size_makes_widescreen():
+    import io
+
+    from PIL import Image
+
+    from audiobook_visualizer.generation.gemini_provider import _fit_to_size
+
+    # A square source image -> fit to 1792x1024 widescreen.
+    buf = io.BytesIO()
+    Image.new("RGB", (1024, 1024), (10, 20, 30)).save(buf, format="PNG")
+    out = _fit_to_size(buf.getvalue(), "1792x1024")
+    assert Image.open(io.BytesIO(out)).size == (1792, 1024)
+    # Non-image bytes fall back unchanged (never break generation).
+    assert _fit_to_size(b"not-an-image", "1792x1024") == b"not-an-image"
+
+
 def test_gemini_error_classification():
     from audiobook_visualizer.generation import gemini_provider as gp
 
@@ -207,8 +224,9 @@ def test_factory_selects_gemini(monkeypatch):
     captured = {}
 
     class FakeGemini:
-        def __init__(self, model=""):
+        def __init__(self, model="", size="1792x1024"):
             captured["model"] = model
+            captured["size"] = size
 
     import audiobook_visualizer.generation.factory as factory
     monkeypatch.setattr(
