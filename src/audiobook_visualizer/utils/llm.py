@@ -22,7 +22,7 @@ import os
 import re
 import shutil
 import subprocess
-from typing import Any
+from typing import Any, Optional
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -116,11 +116,23 @@ class ClaudeCodeClient(_BaseClient):
         return _extract_cli_result(proc.stdout)
 
 
+def _usable_key(value: Optional[str]) -> bool:
+    """True for a real credential, False for empty or placeholder values.
+
+    Guards the common footgun of a leftover ``sk-ant-...`` placeholder in .env
+    hijacking ``auto`` selection (and then 401-ing on every request).
+    """
+    if not value:
+        return False
+    v = value.strip()
+    return bool(v) and "..." not in v
+
+
 def build_llm_client(config: AnalysisConfig) -> _BaseClient:
     """Select an analysis client from config and the available credentials.
 
-    ``provider``: ``auto`` (default) prefers an API key, then a Claude Code token;
-    ``anthropic`` forces the SDK; ``claude-code`` forces the CLI.
+    ``provider``: ``auto`` (default) prefers a real API key, then a Claude Code
+    token; ``anthropic`` forces the SDK; ``claude-code`` forces the CLI.
     """
     provider = (config.provider or "auto").lower()
     if provider == "anthropic":
@@ -128,8 +140,8 @@ def build_llm_client(config: AnalysisConfig) -> _BaseClient:
     if provider in ("claude-code", "claude_code", "cli"):
         return ClaudeCodeClient(config.model, config.temperature)
 
-    # auto
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    # auto: a real API key wins; otherwise fall back to the Claude Code token.
+    if _usable_key(os.environ.get("ANTHROPIC_API_KEY")):
         return ClaudeClient(config.model, config.temperature)
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         return ClaudeCodeClient(config.model, config.temperature)

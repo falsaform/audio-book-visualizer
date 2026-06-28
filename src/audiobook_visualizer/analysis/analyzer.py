@@ -20,6 +20,14 @@ from ..models import BookAnalysis, Character, Scene
 from ..utils.llm import build_llm_client
 from . import prompts
 
+
+def _is_auth_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        s in msg
+        for s in ("authentication", "x-api-key", "401", "unauthorized", "invalid api key")
+    )
+
 ProgressFn = Callable[[str], None]
 
 
@@ -89,6 +97,13 @@ class Analyzer:
                 if isinstance(data, list):
                     partial_lists.append(data)
             except Exception as exc:  # noqa: BLE001 - keep going on one bad chunk
+                if _is_auth_error(exc):
+                    raise RuntimeError(
+                        "Analysis authentication failed. Check your credentials: "
+                        "set a valid ANTHROPIC_API_KEY, or leave it unset and use "
+                        "CLAUDE_CODE_OAUTH_TOKEN (analysis.provider: claude-code). "
+                        f"Underlying error: {exc}"
+                    ) from exc
                 self._progress(f"  (character extraction failed on chunk {i}: {exc})")
 
         if not partial_lists:

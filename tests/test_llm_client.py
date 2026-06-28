@@ -26,6 +26,18 @@ def test_build_client_auto_falls_back_to_oauth(monkeypatch):
     assert client[0] == "cli"
 
 
+def test_placeholder_api_key_is_ignored_in_auto(monkeypatch):
+    # The leftover-placeholder footgun: a "sk-ant-..." value must not hijack auto.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-...")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oat-test")
+    monkeypatch.setattr(llm, "ClaudeCodeClient", lambda model, temp: ("cli", model))
+    monkeypatch.setattr(llm, "ClaudeClient", lambda model, temp: ("sdk", model))
+    assert llm.build_llm_client(AnalysisConfig(provider="auto"))[0] == "cli"
+    assert not llm._usable_key("")
+    assert not llm._usable_key("sk-ant-...")
+    assert llm._usable_key("sk-ant-api03-realkey")
+
+
 def test_build_client_errors_without_credentials(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
