@@ -1,0 +1,29 @@
+# Development + run environment. Everything executes in this one service.
+# The justfile wraps the `docker compose run` invocations.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: audiobook-visualizer:latest
+    env_file:
+      # Optional so compose works before you create it; copy .env.example -> .env.
+      - path: .env
+        required: false
+    working_dir: /app
+    volumes:
+      # Bind-mount the source for live editing. The installed venv lives at
+      # /opt/venv (outside /app), so it is unaffected by this mount and the
+      # editable install keeps pointing at the mounted ./src.
+      - .:/app
+      # Persist the whisper / huggingface model cache between runs.
+      - model-cache:/cache
+      # Persist uv's download cache for fast re-syncs.
+      - uv-cache:/root/.cache/uv
+    # Keep stdin/tty so the rich CLI renders nicely under `docker compose run`.
+    stdin_open: true
+    tty: true
+
+volumes:
+  model-cache:
+  uv-cache:

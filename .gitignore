@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.Python
+
+# Environment / secrets
+.env
+*.local.yaml
+config.yaml
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Project outputs / inputs (large media)
+output/
+runs/
+data/
+*.mp3
+*.m4a
+*.m4b
+*.wav
+*.flac
+*.pdf
+*.epub
+*.png
+*.jpg
+*.jpeg
+!examples/**/*.png
+
+# OS
+.DS_Store
+Thumbs.db

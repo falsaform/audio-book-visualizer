@@ -1,0 +1,34 @@
+# Example configuration. Copy to `config.yaml` and edit, or pass --config.
+# Every field has a sensible default; this file documents what you can tune.
+
+project:
+  # Visual style applied to every generated frame. This is the single biggest
+  # lever on how your visualizations look. Be specific and consistent.
+  style: >-
+    cinematic concept art, painterly, dramatic lighting, muted color palette,
+    detailed, atmospheric, film still, 16:9
+
+analysis:
+  provider: anthropic
+  model: claude-sonnet-4-6        # text analysis model (characters/scenes)
+  max_chars_per_chunk: 12000      # how much book text per analysis request
+  scenes_per_chunk: 3             # target number of still-frame moments per chunk
+  temperature: 0.4
+
+audio:
+  enabled: true
+  backend: faster-whisper         # "faster-whisper" (local) or "openai"
+  model: base                     # whisper model size (tiny/base/small/medium/large-v3)
+  align_to_ebook: true            # attach audio timestamps to scenes when possible
+
+generation:
+  provider: openai
+  model: dall-e-3                 # dall-e-3 or dall-e-2
+  size: 1792x1024                 # dall-e-3 widescreen; use 1024x1024 for dall-e-2
+  quality: standard               # standard | hd  (dall-e-3 only)
+  max_frames: 0                   # 0 = generate a frame for every scene; >0 caps it
+  concurrency: 3                  # parallel image requests
+
+output:
+  dir: output                     # frames, manifest.json and gallery.html land here
+  gallery: true                   # build a browsable HTML gallery

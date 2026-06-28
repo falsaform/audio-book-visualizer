@@ -1,0 +1,65 @@
+# Project recipes. Everything runs in Docker via docker compose.
+# Run `just` (or `just --list`) to see all recipes.
+
+compose := "docker compose"
+service := "app"
+run := compose + " run --rm " + service
+
+# Show available recipes
+default:
+    @just --list
+
+# --- lifecycle -------------------------------------------------------------
+
+# Build the docker image
+build:
+    {{compose}} build
+
+# Rebuild from scratch (no cache)
+rebuild:
+    {{compose}} build --no-cache
+
+# Resolve/update the uv lockfile, then rebuild the image
+lock:
+    {{run}} uv lock
+    {{compose}} build
+
+# Open an interactive shell in the container
+shell:
+    {{run}} bash
+
+# Stop and remove containers + volumes
+down:
+    {{compose}} down -v
+
+# Remove generated outputs (host side)
+clean:
+    rm -rf output
+
+# --- run the pipeline ------------------------------------------------------
+
+# Run the abv CLI with arbitrary args, e.g. `just abv characters output/analysis.json`
+abv *args:
+    {{run}} abv {{args}}
+
+# Run the full visualizer, e.g. `just visualize --ebook book.epub --audio book.m4b`
+visualize *args:
+    {{run}} abv visualize {{args}}
+
+# Offline demo on the bundled sample (stub frames, no image API; needs ANTHROPIC_API_KEY)
+demo:
+    {{run}} abv visualize --ebook examples/sample.txt --dry-run --max-frames 4
+
+# --- quality ---------------------------------------------------------------
+
+# Run the test suite (pass extra args, e.g. `just test -k align`)
+test *args:
+    {{run}} pytest {{args}}
+
+# Lint with ruff
+lint:
+    {{run}} ruff check .
+
+# Format with ruff
+fmt:
+    {{run}} ruff format .
