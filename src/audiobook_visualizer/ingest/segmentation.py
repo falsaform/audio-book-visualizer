@@ -33,6 +33,44 @@ _SPOKEN_CHAPTER_RE = re.compile(
 )
 
 
+# -- joining sub-segments ----------------------------------------------------
+
+
+def join_structures(
+    structures: list[AudiobookStructure], title: Optional[str] = None
+) -> AudiobookStructure:
+    """Merge sub-segment structures (time windows of one book) into one.
+
+    Because preview windows keep absolute timestamps, we order all chapters by
+    start time and concatenate them. Consecutive chapters with the same title
+    (a chapter split across a window boundary) are stitched back together. Use
+    non-overlapping windows to avoid duplicated content.
+    """
+    chapters: list[AudioChapter] = []
+    for st in structures:
+        chapters.extend(st.chapters)
+    chapters.sort(key=lambda c: c.start if c.start is not None else 0.0)
+
+    merged: list[AudioChapter] = []
+    for ch in chapters:
+        if merged and merged[-1].title.strip().lower() == ch.title.strip().lower():
+            merged[-1].paragraphs.extend(p.model_copy(deep=True) for p in ch.paragraphs)
+            if ch.end is not None:
+                merged[-1].end = ch.end
+        else:
+            merged.append(ch.model_copy(deep=True))
+
+    for i, ch in enumerate(merged):
+        ch.index = i
+        for j, para in enumerate(ch.paragraphs):
+            para.index = j
+
+    src_title = structures[0].title if structures else ""
+    return AudiobookStructure(
+        title=title or src_title, source="joined", chapters=merged
+    )
+
+
 # -- public entry point -----------------------------------------------------
 
 

@@ -120,6 +120,22 @@ just segment --audio book.m4b -d 10              # first 10 minutes
 just segment --audio book.m4b --start 60 -d 15   # minutes 60–75
 ```
 
+**Process in slices, then join.** For a very long book you can segment it in
+windows (even on different machines) and stitch the pieces back together —
+windows keep absolute timestamps, so the join just orders by time, and a chapter
+split across a window boundary is rejoined:
+
+```bash
+just segment --audio book.m4b --start 0  -d 60   # -> .../audiobook_structure_0000-60min.json
+just segment --audio book.m4b --start 60 -d 60   # -> .../audiobook_structure_0060-120min.json
+just abv join output/book/audiobook_structure_*min.json -o output/book/audiobook_structure.json
+just visualize --structure output/book/audiobook_structure.json
+```
+
+Windowed segments are written to distinct `audiobook_structure_<start>-<end>min.json`
+files (so they don't overwrite each other); a full-file segment writes plain
+`audiobook_structure.json`.
+
 Transcription is the slow step, so `segment` shows a live **progress bar** that
 advances with the audio position (with elapsed/remaining time). `visualize`
 reports the same progress as throttled percentage lines.
@@ -248,7 +264,10 @@ Everything has sane defaults. To tune, copy `config.example.yaml` to
 
 ## Outputs
 
-A run writes to `output/` (configurable):
+Each input gets its **own subfolder** so multiple books don't collide:
+`output/<book-slug>/` (the slug comes from the input filename). Pass `--out` to
+override; reusing a structure with `--structure` writes next to that file. A run
+writes:
 
 - `analysis.json` — characters + scenes (the structured analysis).
 - `audiobook_structure.json` — chapters + paragraphs with audio timestamps (audiobook-only mode).

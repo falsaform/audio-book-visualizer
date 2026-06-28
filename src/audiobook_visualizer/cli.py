@@ -18,6 +18,7 @@ from rich.table import Table
 
 from .config import Config, load_env
 from .pipeline import Pipeline
+from .utils import slugify
 
 app = typer.Typer(
     add_completion=False,
@@ -28,6 +29,32 @@ console = Console()
 
 def _progress(msg: str) -> None:
     console.print(f"[dim]·[/dim] {msg}")
+
+
+def _resolve_output_dir(
+    config: Config,
+    out: Optional[Path],
+    *,
+    ebook: Optional[Path] = None,
+    audio: Optional[Path] = None,
+    structure: Optional[Path] = None,
+) -> str:
+    """Pick the output dir: an explicit --out wins, else a per-book subfolder.
+
+    Subfolder name derives from the input file so multiple books don't collide:
+    ``output/<book-slug>/``. When reusing a structure, output lands next to it.
+    """
+    if out is not None:
+        return str(out)
+    if structure is not None:
+        return str(Path(structure).parent)
+    base = Path(config.output.dir)
+    stem = None
+    if ebook is not None:
+        stem = ebook.stem
+    elif audio is not None:
+        stem = audio.stem
+    return str(base / slugify(stem)) if stem else str(base)
 
 
 @app.command()
@@ -78,8 +105,9 @@ def visualize(
     config = Config.load(config_path)
 
     # Apply CLI overrides.
-    if out is not None:
-        config.output.dir = str(out)
+    config.output.dir = _resolve_output_dir(
+        config, out, ebook=ebook, audio=audio, structure=structure
+    )
     if style is not None:
         config.project.style = style
     if max_frames is not None:
@@ -185,8 +213,7 @@ def segment(
 
     load_env()
     config = Config.load(config_path)
-    if out is not None:
-        config.output.dir = str(out)
+    config.output.dir = _resolve_output_dir(config, out, audio=audio)
     if chapter_mode is not None:
         config.audio.chapter_mode = chapter_mode
 
@@ -211,7 +238,14 @@ def segment(
 
     out_dir = Path(config.output.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    structure_path = out_dir / "audiobook_structure.json"
+    # Windowed previews get a distinct name so sub-segments don't overwrite each
+    # other (and can be joined later with `abv join`).
+    if start_s or duration_s is not None:
+        end_min = int(start + duration) if duration is not None else "end"
+        fname = f"audiobook_structure_{int(start):04d}-{end_min}min.json"
+    else:
+        fname = "audiobook_structure.json"
+    structure_path = out_dir / fname
     structure_path.write_text(structure.model_dump_json(indent=2), encoding="utf-8")
 
     table = Table(title=f"Audiobook structure — {structure.title} (via {structure.source})")
@@ -232,6 +266,54 @@ def _fmt_time(seconds: Optional[float]) -> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+
+
+@app.command()
+def join(
+    structures: list[Path] = typer.Argument(
+        ..., help="Sub-segment audiobook_structure_*.json files to join."
+    ),
+    out: Path = typer.Option(
+        ..., "--out", "-o", help="Combined audiobook_structure.json to write."
+    ),
+    title: Optional[str] = typer.Option(None, "--title", help="Title for the combined structure."),
+):
+    """Join sub-segment structure files into one (ordered by timestamp).
+
+    Segment a long book in slices (`abv segment -a book.m4b --start S -d D`),
+    then join the pieces here. The result feeds `abv visualize --structure`.
+    """
+    from .ingest import join_structures
+    from .models import AudiobookStructure
+
+    loaded: list[AudiobookStructure] = []
+    for path in structures:
+        try:
+            loaded.append(AudiobookStructure.model_validate_json(Path(path).read_text()))
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not read {path}:[/red] {exc}")
+            raise typer.Exit(code=1)
+
+    combined = join_structures(loaded, title=title)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(combined.model_dump_json(indent=2), encoding="utf-8")
+
+    n_para = sum(len(c.paragraphs) for c in combined.chapters)
+    table = Table(title=f"Joined {len(loaded)} segment(s) — {combined.title}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Chapter", style="bold cyan")
+    table.add_column("Paras", justify="right")
+    table.add_column("Span")
+    for ch in combined.chapters:
+        table.add_row(
+            str(ch.index + 1), ch.title, str(len(ch.paragraphs)),
+            f"{_fmt_time(ch.start)}–{_fmt_time(ch.end)}",
+        )
+    console.print(table)
+    console.print(
+        f"  {len(combined.chapters)} chapter(s), {n_para} paragraph(s) -> "
+        f"[underline]{out}[/underline]"
+    )
 
 
 def _transcribe_with_progress(
