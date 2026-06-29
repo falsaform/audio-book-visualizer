@@ -1,0 +1,1 @@
+{"properties":{"severity":{"title":"Severity","type":"string"},"category":{"title":"Category","type":"string"},"message":{"title":"Message","type":"string"}},"required":["severity","category","message"],"title":"ContinuityOut","type":"object","x-readme-ref-name":"ContinuityOut"}

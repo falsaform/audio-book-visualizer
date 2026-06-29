@@ -1,0 +1,1 @@
+{"properties":{"at":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"At"}},"title":"SplitShotIn","type":"object","x-readme-ref-name":"SplitShotIn"}

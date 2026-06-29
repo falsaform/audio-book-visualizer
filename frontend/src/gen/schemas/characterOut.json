@@ -1,0 +1,1 @@
+{"properties":{"name":{"title":"Name","type":"string"},"aliases":{"default":[],"items":{"type":"string"},"title":"Aliases","type":"array"},"description":{"default":"","title":"Description","type":"string"},"role":{"default":"","title":"Role","type":"string"}},"required":["name"],"title":"CharacterOut","type":"object","x-readme-ref-name":"CharacterOut"}

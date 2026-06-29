@@ -1,0 +1,78 @@
+# Example configuration. Copy to `config.yaml` and edit, or pass --config.
+# Every field has a sensible default; this file documents what you can tune.
+
+project:
+  # Visual style applied to every generated frame. This is the single biggest
+  # lever on how your visualizations look. Be specific and consistent.
+  style: >-
+    cinematic concept art, painterly, dramatic lighting, muted color palette,
+    detailed, atmospheric, film still, 16:9
+
+analysis:
+  # auto = use ANTHROPIC_API_KEY if set, else the bundled Claude Code CLI
+  # (CLAUDE_CODE_OAUTH_TOKEN). Force with "anthropic" or "claude-code".
+  provider: auto
+  model: claude-sonnet-4-6        # text analysis model (characters/scenes)
+  mode: scenes                    # "scenes" (key moments), "paragraphs" (one frame
+                                  # per paragraph, narration-timed), or "director"
+                                  # (crew writes a screenplay + shot list; needs audio)
+  paragraphs_per_scene: 1         # paragraph mode: paragraphs per frame (raise to cut cost)
+  # Smaller chunks + more scenes => denser frames that track the narration
+  # (a frame every ~30s). Raise/lower to trade pacing against cost.
+  max_chars_per_chunk: 8000       # how much book text per analysis request
+  scenes_per_chunk: 5             # target number of still-frame moments per chunk (scene mode)
+  temperature: 0.4
+
+audio:
+  enabled: true
+  backend: faster-whisper         # "faster-whisper" (local) or "openai"
+  model: base                     # whisper model size (tiny/base/small/medium/large-v3)
+  align_to_ebook: true            # attach audio timestamps to scenes when possible
+  chunk_seconds: 600              # stream audio through ffmpeg into N-second
+                                  # chunks and transcribe one at a time, so memory
+                                  # stays bounded on very long (12h+) audiobooks.
+                                  # 0 disables (loads whole file — tiny inputs only)
+  # Audiobook-only mode: when no ebook is supplied, recover structure from audio.
+  segment: true                   # segment into chapters + paragraphs
+  chapter_mode: auto              # auto | files | markers | headings | time | single
+                                  # ("files" = one chapter per file for folder input)
+  chapter_seconds: 900            # window length (s) for the "time" fallback
+  paragraph_gap: 0.65             # narration pause (s) that can end a paragraph
+  paragraph_max_chars: 1500       # hard cap so paragraphs stay bounded
+
+generation:
+  provider: auto                  # auto picks from your keys; or openai | gemini | stub
+  model: dall-e-3                 # dall-e-3/dall-e-2; for gemini: gemini-2.5-flash-image
+  size: 1792x1024                 # dall-e-3 widescreen; use 1024x1024 for dall-e-2
+  quality: standard               # standard | hd  (dall-e-3 only)
+  max_frames: 0                   # 0 = generate a frame for every scene; >0 caps it
+  concurrency: 3                  # parallel image requests
+  cache: true                     # keep existing frames/portraits (delete one to redo it)
+  character_portraits: true       # render a per-character portrait and feed it as a
+                                  # reference for consistency (gemini; ignored by DALL-E)
+  portrait_size: 1024x1024        # portraits are square (avoids the widescreen face crop)
+  shot_variety: true              # include the per-scene shot type (wide/close-up) in prompts
+
+# Director mode (analysis.mode: director): a crew of role-agents writes a
+# screenplay and breaks it into shots with camera moves. Off unless mode=director.
+crew:
+  enabled: false
+  agent_mode: false               # true = run each role as an autonomous multi-turn
+                                  # Claude Code agent (needs the claude CLI); false =
+                                  # one structured call per role (works with an API key)
+  max_revisions: 2                # script-critic loop bound (a later slice)
+  timing:
+    target_seconds_per_shot: 8.0  # shot count per scene is derived from its duration
+    min_shot_seconds: 3.0         # each shot gets at least this long when it fits
+    max_shots_per_scene: 6
+  roles:                          # the crew, run in order — add/disable/reorder these
+    - name: script_writer
+      model: claude-sonnet-4-6
+      max_turns: 6
+    - name: director
+      model: claude-sonnet-4-6
+      max_turns: 6
+
+output:
+  dir: output                     # production.db, frames and gallery.html land here
+  gallery: true                   # build a browsable HTML gallery

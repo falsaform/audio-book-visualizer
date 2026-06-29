@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+# container-run caches (HOME=/app inside the Node container)
+.npm/
+.local/
+.cache/
+.pnpm-store/

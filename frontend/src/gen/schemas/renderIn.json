@@ -1,0 +1,1 @@
+{"properties":{"prompt":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Prompt"},"style":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Style"}},"title":"RenderIn","type":"object","x-readme-ref-name":"RenderIn"}

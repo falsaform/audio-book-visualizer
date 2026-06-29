@@ -1,0 +1,40 @@
+# Frontend (Vite + TypeScript + React + pnpm).
+#
+# Recipes run pnpm INSIDE a Node container, so you don't need Node/pnpm on the
+# host. Run from the repo root as `just frontend <recipe>`, or from this folder
+# as `just <recipe>`:
+#   just frontend install
+#   just frontend build       # -> frontend/dist (served by `abv web`)
+#   just frontend dev         # Vite dev server, proxies /api to the API on :8000
+#
+# Files are written as your user; pnpm's store + npm cache live under the mount
+# (gitignored), so installs are cached across runs. `$PWD` is this folder because
+# just runs each recipe from its own justfile's directory (module or standalone).
+
+node_image := "node:22-slim"
+
+# Run `pnpm <args>` in a throwaway Node container (pnpm fetched via npx).
+[private]
+pnpm +args:
+    docker run --rm -v "$PWD":/app -w /app --user "$(id -u):$(id -g)" \
+        -e HOME=/app -e CI=true -e npm_config_update_notifier=false \
+        {{node_image}} sh -lc 'npx --yes pnpm@11 {{args}}'
+
+# Install dependencies
+install: (pnpm "install")
+
+# Regenerate the typed client + TanStack Query hooks from openapi.json.
+# (To refresh openapi.json itself after API changes, run `just openapi` at the root.)
+generate: (pnpm "install --prefer-offline") (pnpm "run generate")
+
+# Build the static SPA into frontend/dist
+build: (pnpm "install --prefer-offline") (pnpm "run generate") (pnpm "run build")
+
+# Type-check
+typecheck: (pnpm "install --prefer-offline") (pnpm "run typecheck")
+
+# Vite dev server (host network so it can proxy to the API on :8000)
+dev:
+    docker run --rm -it --network host -v "$PWD":/app -w /app --user "$(id -u):$(id -g)" \
+        -e HOME=/app -e CI=true {{node_image}} \
+        sh -lc 'npx --yes pnpm@11 install --prefer-offline && npx --yes pnpm@11 run dev -- --host'

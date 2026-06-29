@@ -1,0 +1,11 @@
+# pnpm 11 reads its build-script allowlist + settings from here (not package.json).
+# esbuild (via Vite) needs its postinstall to fetch the platform binary; es5-ext's
+# build is irrelevant for us — classify both so install/run never errors in CI.
+onlyBuiltDependencies:
+  - esbuild
+ignoredBuiltDependencies:
+  - es5-ext
+verifyDepsBeforeRun: false
+allowBuilds:
+  es5-ext: set this to true or false
+  esbuild: set this to true or false

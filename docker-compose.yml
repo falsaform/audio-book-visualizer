@@ -1,0 +1,40 @@
+# Development + run environment. Everything executes in this one service.
+# The justfile wraps the `docker compose run` invocations.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: audiobook-visualizer:latest
+    env_file:
+      # Optional so compose works before you create it; copy .env.example -> .env.
+      - path: .env
+        required: false
+    environment:
+      # Forward these from the host shell when set (CI, exported vars), in
+      # addition to whatever .env provides. `${VAR:-}` keeps them optional.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # When run as a non-root host UID, keep uv's cache in the world-writable
+      # /cache volume (HOME is /home/app in the image).
+      UV_CACHE_DIR: /cache/uv
+    working_dir: /app
+    # Published when started with `--service-ports` (see `just web`).
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount the source for live editing. The installed venv lives at
+      # /opt/venv (outside /app), so it is unaffected by this mount and the
+      # editable install keeps pointing at the mounted ./src.
+      - .:/app
+      # Persist whisper/huggingface models + uv cache between runs. World-writable
+      # (chmod 777 in the image) so an arbitrary host UID can populate it.
+      - cache:/cache
+    # Keep stdin/tty so the rich CLI renders nicely under `docker compose run`.
+    stdin_open: true
+    tty: true
+
+volumes:
+  cache:

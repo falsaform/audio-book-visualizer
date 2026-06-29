@@ -1,0 +1,22 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+output
+runs
+data
+.env
+*.local.yaml
+config.yaml
+# Large media that should never go into the build context
+*.mp3
+*.m4a
+*.m4b
+*.wav
+*.flac
+*.pdf
+*.epub
