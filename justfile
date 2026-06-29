@@ -19,7 +19,9 @@ default:
 
 # Frontend (Vite/TS/pnpm) tasks live in frontend/justfile — `just frontend <recipe>`,
 # e.g. `just frontend build`. They run pnpm inside a Node container.
-mod frontend
+# (A forwarding recipe rather than `mod` so it works on older `just`.)
+frontend *args:
+    @just --justfile frontend/justfile --working-directory frontend {{args}}
 
 # --- lifecycle -------------------------------------------------------------
 
