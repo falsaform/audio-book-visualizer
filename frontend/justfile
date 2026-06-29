@@ -17,8 +17,8 @@ node_image := "node:22-slim"
 [private]
 pnpm +args:
     docker run --rm -v "$PWD":/app -w /app --user "$(id -u):$(id -g)" \
-        -e HOME=/app -e npm_config_update_notifier=false \
-        {{node_image}} sh -lc 'npx --yes pnpm@9 {{args}}'
+        -e HOME=/app -e CI=true -e npm_config_update_notifier=false \
+        {{node_image}} sh -lc 'npx --yes pnpm@11 {{args}}'
 
 # Install dependencies
 install: (pnpm "install")
@@ -36,5 +36,5 @@ typecheck: (pnpm "install --prefer-offline") (pnpm "run typecheck")
 # Vite dev server (host network so it can proxy to the API on :8000)
 dev:
     docker run --rm -it --network host -v "$PWD":/app -w /app --user "$(id -u):$(id -g)" \
-        -e HOME=/app {{node_image}} \
-        sh -lc 'npx --yes pnpm@9 install --prefer-offline && npx --yes pnpm@9 run dev -- --host'
+        -e HOME=/app -e CI=true {{node_image}} \
+        sh -lc 'npx --yes pnpm@11 install --prefer-offline && npx --yes pnpm@11 run dev -- --host'
