@@ -510,6 +510,7 @@ class Pipeline:
         self,
         audio_path: Optional[str] = None,
         structure_path: Optional[str] = None,
+        segment_label: Optional[str] = None,
         analyze_only: bool = False,
         dry_run: bool = False,
         force: bool = False,
@@ -520,7 +521,9 @@ class Pipeline:
         # where frame images and the compiled video live, so separately rendered
         # chunks don't overwrite each other.
         book_dir = Path(self.config.output.dir)
-        chunk_label = _chunk_label(structure_path) if structure_path else "full"
+        chunk_label = (
+            _chunk_label(structure_path) if structure_path else (segment_label or "full")
+        )
         out_dir = (book_dir / chunk_label) if chunk_label != "full" else book_dir
         book_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -536,7 +539,17 @@ class Pipeline:
             self._progress("  (pass --reanalyze to regenerate it from the source)")
             analysis = store.load_segment_analysis(production_id, segment_id)
         else:
-            ingested = self.ingest(audio_path, structure_path)
+            # Re-analyse straight from the structure stored in the DB when no source
+            # is supplied (so a structure file is only needed the first time).
+            stored = store.get_segment_structure(segment_id) if segment_id is not None else None
+            if reanalyze and not structure_path and not audio_path and stored:
+                self._progress("Re-analyzing from the structure stored in production.db")
+                structure = AudiobookStructure.model_validate_json(stored)
+                ingested = IngestResult(
+                    chapters=structure.as_chapters, title=structure.title, structure=structure
+                )
+            else:
+                ingested = self.ingest(audio_path, structure_path)
 
             if ingested.structure is not None and not structure_path:
                 # Freshly segmented (not reusing a structure): persist at book level.
@@ -573,6 +586,10 @@ class Pipeline:
                 )
                 store.persist_scenes_as_shots(production_id, segment_id, analysis.scenes)
                 self._progress(f"Persisted {len(analysis.scenes)} shot(s) to production.db")
+
+            # Keep the source structure in the DB so re-analysis needs no file.
+            if ingested.structure is not None:
+                store.set_segment_structure(segment_id, ingested.structure.model_dump_json())
 
             # Reload so characters_present are canonicalised against the bible.
             analysis = store.load_segment_analysis(production_id, segment_id)

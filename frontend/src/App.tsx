@@ -5,6 +5,7 @@ import {
   getStateQueryKey,
   useGetJob,
   useGetState,
+  useRenderAll,
   useRenderShot,
   useSplitShot,
   useUpdateShot,
@@ -18,10 +19,20 @@ const MOVE_LABEL: Record<string, string> = { '': '(default — Ken Burns)' }
 type Status = { kind: 'ok' | 'err' | ''; msg: string }
 
 export function App() {
-  const state = useGetState()
+  const qc = useQueryClient()
+  const refreshState = () => qc.invalidateQueries({ queryKey: getStateQueryKey() })
+
+  // Auto-poll while any render job is queued/running so images stream in.
+  const state = useGetState({
+    query: {
+      refetchInterval: (q): number | false => {
+        const d = q.state.data as StateOut | undefined
+        return d && (d.jobs?.length ?? 0) > 0 ? 1200 : false
+      },
+    },
+  })
+  const renderAll = useRenderAll()
   const [selected, setSelected] = useState<string | null>(null)
-  const scenes: ShotOut[] = state.data?.scenes ?? []
-  const shot = scenes.find((s) => s.id === selected) ?? null
 
   if (state.isError) {
     const msg = (state.error as Error)?.message ?? 'No production found. Run `abv visualize` first.'
@@ -29,9 +40,22 @@ export function App() {
   }
   if (!state.data) return <div className="centered">Loading…</div>
 
+  const scenes: ShotOut[] = state.data.scenes ?? []
+  const shot = scenes.find((s) => s.id === selected) ?? null
+  const rendered = scenes.filter((s) => s.rendered).length
+  const active = state.data.jobs?.length ?? 0
+  const pending = scenes.length - rendered
+
+  const onGenerateAll = () =>
+    renderAll.mutate({ data: { only_missing: true } }, { onSuccess: refreshState })
+
   return (
     <>
-      <Header state={state.data} />
+      <Header
+        state={state.data} rendered={rendered} total={scenes.length} active={active}
+        busy={renderAll.isPending} canGenerate={pending > 0 && active === 0}
+        onGenerateAll={onGenerateAll}
+      />
       <div className="layout">
         <Grid scenes={scenes} selected={selected} onSelect={setSelected} />
         {shot ? (
@@ -44,12 +68,19 @@ export function App() {
   )
 }
 
-function Header({ state }: { state: StateOut }) {
+function Header({ state, rendered, total, active, busy, canGenerate, onGenerateAll }: {
+  state: StateOut; rendered: number; total: number; active: number
+  busy: boolean; canGenerate: boolean; onGenerateAll: () => void
+}) {
   const n = state.continuity?.length ?? 0
+  const label = active > 0 ? `Rendering ${active}…`
+    : canGenerate ? `Generate all (${total - rendered})`
+    : 'All rendered'
   return (
     <header>
       <h1>{state.title || 'Audiobook Visualizer'}</h1>
       <span className="sub">{state.author ? `— ${state.author}` : ''}</span>
+      <span className="count">{rendered}/{total} shots rendered</span>
       <span className="spacer" />
       {n > 0 && (
         <span className="badge warn" title={(state.continuity ?? []).map((c) => `[${c.severity}] ${c.message}`).join('\n')}>
@@ -57,6 +88,9 @@ function Header({ state }: { state: StateOut }) {
         </span>
       )}
       <span className="badge">{state.provider}</span>
+      <button className="gen" onClick={onGenerateAll} disabled={busy || active > 0 || !canGenerate}>
+        {label}
+      </button>
     </header>
   )
 }
@@ -64,17 +98,26 @@ function Header({ state }: { state: StateOut }) {
 function Grid({ scenes, selected, onSelect }: {
   scenes: ShotOut[]; selected: string | null; onSelect: (id: string) => void
 }) {
+  let lastHeading: string | null = null
   return (
     <div className="grid">
-      {scenes.map((s) => (
-        <div key={s.id} className={'card' + (s.id === selected ? ' selected' : '')} onClick={() => onSelect(s.id)}>
-          {s.image_url ? <img loading="lazy" src={s.image_url} alt="" /> : <div className="ph">not generated</div>}
-          <div className="cap">
-            <div className="ch">{s.chapter || ''}</div>
-            {s.title || s.id} {s.camera_move && <span className="mv">▶ {s.camera_move}</span>}
-          </div>
-        </div>
-      ))}
+      {scenes.flatMap((s) => {
+        const nodes = []
+        if (s.scene_heading && s.scene_heading !== lastHeading) {
+          lastHeading = s.scene_heading
+          nodes.push(<h2 key={`h-${s.id}`} className="section">{s.scene_heading}</h2>)
+        }
+        nodes.push(
+          <div key={s.id} className={'card' + (s.id === selected ? ' selected' : '')} onClick={() => onSelect(s.id)}>
+            {s.image_url ? <img loading="lazy" src={s.image_url} alt="" /> : <div className="ph">not generated</div>}
+            <div className="cap">
+              <div className="ch">{s.chapter || ''}</div>
+              {s.title || s.id} {s.camera_move && <span className="mv">▶ {s.camera_move}</span>}
+            </div>
+          </div>,
+        )
+        return nodes
+      })}
     </div>
   )
 }
@@ -140,7 +183,7 @@ function Detail({ shot }: { shot: ShotOut }) {
         ? <img className="detail" src={shot.image_url} alt="" />
         : <div className="ph detail-ph">not generated yet</div>}
       <h2>{shot.title || shot.id}</h2>
-      <div className="slug">{shot.id}</div>
+      <div className="slug">{shot.scene_heading ? shot.scene_heading + ' · ' : ''}{shot.id}</div>
       <div className="meta">
         {shot.chapter && <div><b>Chapter:</b> {shot.chapter}</div>}
         {shot.summary && <div>{shot.summary}</div>}

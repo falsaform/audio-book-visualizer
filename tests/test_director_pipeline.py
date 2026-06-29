@@ -90,6 +90,33 @@ def test_director_mode_writes_screenplay_and_shots(tmp_path, monkeypatch):
     assert {c.move for c in segs[0].cues} == {"push_in", "tilt_up"}
 
 
+def test_reanalyze_from_db_needs_no_structure_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(anmod, "build_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr(agmod, "build_llm_client", lambda cfg: FakeClient())
+
+    import os
+
+    book = tmp_path / "moby"
+    cfg = Config()
+    cfg.output.dir = str(book)
+    cfg.analysis.mode = "director"
+    cfg.crew.enabled = True
+
+    # Plan-only run from the structure file (the "review before generate" entry).
+    struct = _structure_file(tmp_path)  # audiobook_structure_0000-2min.json
+    Pipeline(cfg).run(structure_path=str(struct), analyze_only=True)
+
+    store = ProductionStore.open(book)
+    pid = store.get_production_id()
+    seg_id = store.find_segment(pid, "0000-2min")
+    assert store.get_segment_structure(seg_id) is not None  # structure is in the DB
+
+    # Delete the file and re-analyze the segment straight from the DB.
+    os.remove(struct)
+    analysis = Pipeline(cfg).run(segment_label="0000-2min", reanalyze=True, analyze_only=True)
+    assert analysis is not None and len(analysis.scenes) == 2
+
+
 def test_director_without_structure_falls_back(tmp_path, monkeypatch):
     monkeypatch.setattr(anmod, "build_llm_client", lambda cfg: FakeClient())
 

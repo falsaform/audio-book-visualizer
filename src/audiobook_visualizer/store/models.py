@@ -63,6 +63,9 @@ class Segment(SQLModel, table=True):
     start: float = 0.0  # window start (seconds)
     end: float = 0.0  # window end (seconds)
     structure_path: Optional[str] = None
+    # The full AudiobookStructure JSON (chapters/paragraphs/timestamps) this
+    # segment was analysed from — so re-analysis needs no external file.
+    structure_json: Optional[str] = None
 
 
 class Character(SQLModel, table=True):

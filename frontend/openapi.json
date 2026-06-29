@@ -65,6 +65,36 @@
         }
       }
     },
+    "/render-all": {
+      "post": {
+        "operationId": "renderAll",
+        "summary": "Render All",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderAllOut"
+                }
+              }
+            }
+          }
+        },
+        "description": "Enqueue async re-renders for every shot (or only the unrendered ones).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenderAllIn"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/jobs/{job_id}": {
       "get": {
         "operationId": "getJob",
@@ -429,10 +459,20 @@
             "title": "Camera Move",
             "type": "string"
           },
+          "scene_heading": {
+            "default": "",
+            "title": "Scene Heading",
+            "type": "string"
+          },
           "prompt": {
             "default": "",
             "title": "Prompt",
             "type": "string"
+          },
+          "rendered": {
+            "default": false,
+            "title": "Rendered",
+            "type": "boolean"
           },
           "frame": {
             "anyOf": [
@@ -554,6 +594,38 @@
           }
         },
         "title": "RenderIn",
+        "type": "object"
+      },
+      "RenderAllOut": {
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "integer"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/JobOut"
+            },
+            "title": "Jobs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queued",
+          "jobs"
+        ],
+        "title": "RenderAllOut",
+        "type": "object"
+      },
+      "RenderAllIn": {
+        "properties": {
+          "only_missing": {
+            "default": true,
+            "title": "Only Missing",
+            "type": "boolean"
+          }
+        },
+        "title": "RenderAllIn",
         "type": "object"
       },
       "UpdateShotIn": {

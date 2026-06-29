@@ -125,3 +125,20 @@ def test_split_shot_adds_a_shot(tmp_path, store_seeder):
 def test_update_unknown_shot_404(tmp_path, store_seeder):
     _seed(store_seeder, tmp_path)
     assert _client(tmp_path).post("/shots/nope/update", json={"camera_move": "static"}).status_code == 404
+
+
+def test_render_all_generates_unrendered(tmp_path, store_seeder):
+    _seed(store_seeder, tmp_path)
+    client = _client(tmp_path)
+
+    # Review state first: shots planned but not rendered (the review-before-generate flow).
+    state = client.get("/state").json()
+    assert all(not s["rendered"] for s in state["scenes"])
+    assert all("scene_heading" in s for s in state["scenes"])
+
+    res = client.post("/render-all", json={"only_missing": True}).json()
+    assert res["queued"] == 2 and all(j["status"] == "done" for j in res["jobs"])  # sync mode
+    assert all(s["rendered"] for s in client.get("/state").json()["scenes"])
+
+    # Nothing left to do on a second pass.
+    assert client.post("/render-all", json={"only_missing": True}).json()["queued"] == 0

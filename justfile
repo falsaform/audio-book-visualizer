@@ -17,6 +17,10 @@ runci := compose + " run --rm -T " + asuser + " " + service
 default:
     @just --list
 
+# Frontend (Vite/TS/pnpm) tasks live in frontend/justfile — `just frontend <recipe>`,
+# e.g. `just frontend build`. They run pnpm inside a Node container.
+mod frontend
+
 # --- lifecycle -------------------------------------------------------------
 
 # Build the docker image
@@ -74,10 +78,15 @@ video *args:
 demo:
     {{run}} abv visualize --structure examples/sample_structure.json --director --dry-run --out output/sample
 
-# Serve the web UI (browse + regenerate frames) at http://localhost:8000
+# Serve the web UI (browse + edit + render shots) at http://localhost:8000
 # Pass extra args, e.g. `just web --dry-run` or `just web --out runs/moby`
 web *args:
     {{compose}} run --rm --service-ports {{service}} abv web --host 0.0.0.0 {{args}}
+
+# Export the API's OpenAPI schema for the frontend codegen (-> frontend/openapi.json).
+# Run after changing the web API, then `just frontend generate`.
+openapi:
+    {{runci}} python -m audiobook_visualizer.web.api > frontend/openapi.json
 
 # --- quality ---------------------------------------------------------------
 

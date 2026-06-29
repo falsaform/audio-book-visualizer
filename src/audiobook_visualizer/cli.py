@@ -61,6 +61,12 @@ def visualize(
         "--structure",
         help="Reuse an existing audiobook_structure.json (skip transcription).",
     ),
+    segment: Optional[str] = typer.Option(
+        None,
+        "--segment",
+        help="Reuse/--reanalyze an existing segment from production.db by label "
+        "(e.g. 0005-20min) — no structure file needed after the first run.",
+    ),
     config_path: Optional[Path] = typer.Option(
         None, "--config", "-c", help="Path to config.yaml (defaults to ./config.yaml)."
     ),
@@ -131,8 +137,8 @@ def visualize(
         config.analysis.mode = "director"
         config.crew.enabled = True
 
-    if not audio and not structure:
-        console.print("[red]Error:[/red] provide --audio or --structure.")
+    if not audio and not structure and not segment:
+        console.print("[red]Error:[/red] provide --audio, --structure, or --segment.")
         raise typer.Exit(code=2)
 
     pipeline = Pipeline(config, on_progress=_progress)
@@ -140,6 +146,7 @@ def visualize(
         analysis = pipeline.run(
             audio_path=str(audio) if audio else None,
             structure_path=str(structure) if structure else None,
+            segment_label=segment,
             analyze_only=analyze_only,
             dry_run=dry_run,
             force=force,

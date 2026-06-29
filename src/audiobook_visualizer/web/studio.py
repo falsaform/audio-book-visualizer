@@ -104,7 +104,9 @@ class Studio:
         return {
             **scene.model_dump(),
             "camera_move": shot.camera_move,
+            "scene_heading": shot.heading,
             "prompt": prompt,
+            "rendered": bool(frame and frame.ok),
             "frame": frame.model_dump() if frame else None,
             "image_url": self.image_url(frame.image_path if frame else None),
             "reference_urls": self._ref_urls(frame),
@@ -155,17 +157,31 @@ class Studio:
 
     # -- async render queue -------------------------------------------------
 
-    def enqueue_render(self, slug: str, prompt: Optional[str], style: Optional[str]) -> dict:
-        pid, seg_id = self.ids()
-        seg = self.store.segment_view(seg_id)
-        if not any(s.slug == slug for s in (seg.shots if seg else [])):
-            raise NotFound(f"Unknown shot: {slug}")
-        job_id = self.store.create_render_job(seg_id, slug, time.time(), prompt or None, style or None)
+    def _submit(self, seg_id: int, slug: str, prompt=None, style=None) -> dict:
+        job_id = self.store.create_render_job(seg_id, slug, time.time(), prompt, style)
         if self.sync:
             self._run_job(job_id)
         else:
             self._executor.submit(self._run_job, job_id)
         return self.job(job_id)
+
+    def enqueue_render(self, slug: str, prompt: Optional[str], style: Optional[str]) -> dict:
+        pid, seg_id = self.ids()
+        seg = self.store.segment_view(seg_id)
+        if not any(s.slug == slug for s in (seg.shots if seg else [])):
+            raise NotFound(f"Unknown shot: {slug}")
+        return self._submit(seg_id, slug, prompt or None, style or None)
+
+    def render_all(self, only_missing: bool = True) -> dict:
+        """Enqueue render jobs for every shot (or only the unrendered ones)."""
+        pid, seg_id = self.ids()
+        seg = self.store.segment_view(seg_id)
+        jobs = []
+        for shot in (seg.shots if seg else []):
+            if only_missing and shot.frame and shot.frame.ok:
+                continue
+            jobs.append(self._submit(seg_id, shot.slug))
+        return {"queued": len(jobs), "jobs": jobs}
 
     def job(self, job_id: int) -> dict:
         view = self.store.get_render_job(job_id)

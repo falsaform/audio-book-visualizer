@@ -191,6 +191,18 @@ This is the fast path for long books (transcribe once, then iterate on analysis
 and frames), and it pairs with the preview window: segment a 10-minute slice,
 then `visualize --structure` it for a quick end-to-end preview.
 
+**Do you still need the structure files?** Only the *first* time. The structure a
+segment is analyzed from is now stored **inside `production.db`**, so after the
+first `visualize` you can re-plan a segment straight from the database — no file:
+
+```bash
+just visualize --segment 0005-20min --reanalyze     # re-analyze from the DB
+```
+
+The `audiobook_structure_*.json` files remain useful as a portable, inspectable
+export and as the **transcription cache** (so you never re-transcribe), but they're
+no longer the source of truth — the DB is.
+
 ### Rendering chunks incrementally (no overwrite, shared characters)
 
 You can render a long book in pieces and accumulate the results. Each structure
@@ -247,7 +259,8 @@ just lock       # re-resolve uv.lock after editing pyproject.toml, then rebuild
 | `--director` | Crew mode: screenplay + shot list with camera moves (needs audio). |
 | `--audio / -a` | Path to audiobook (`.mp3` / `.m4a` / `.m4b` / `.wav`). |
 | `--structure` | Reuse an existing `audiobook_structure.json` (skip transcription). |
-| `--analyze-only` | Stop after analysis; persist scenes to `production.db`, skip images. |
+| `--segment` | Reuse/`--reanalyze` an existing DB segment by label, no file needed. |
+| `--analyze-only` | Plan only: persist screenplay/shots to `production.db`, skip images. |
 | `--dry-run` | Use the offline stub image provider (no DALL·E/Gemini calls). |
 | `--provider / -p` | Image provider: `openai` / `gemini` / `stub`. |
 | `--force` | Regenerate all frames, ignoring the cache. |
@@ -318,35 +331,39 @@ just web --out runs/moby       # browse a specific run
 just web --dry-run             # re-render with the offline stub provider (no API calls)
 ```
 
-It reads an existing run's `production.db`, so do a `visualize` (or `visualize
---analyze-only`) first. The page lists every shot; selecting one shows its image,
-the **source narration** it was drawn from, and the exact **prompt** sent to the
-image model. From there you can:
+It reads an existing run's `production.db`, so do a `visualize` first.
+
+**Review before generating.** Run `visualize --director --analyze-only` to plan the
+whole storyboard — screenplay, shots, camera moves — into the DB *without* spending
+any image quota. The web UI then shows every shot grouped under its scene heading,
+each with the **source narration** it was drawn from and the exact **prompt** that
+would be sent to the image model, all as "not generated" placeholders. When you're
+happy, hit **Generate all** in the header to render them. Per shot you can also:
 
 - **edit the shot** — its visual description, **camera move**, and shot type;
 - **split a shot** into two halves and edit each independently;
 - **re-render** the frame **asynchronously** — the API enqueues a `RenderJob`
   (worked off by an in-process pool) and the UI polls it to completion, so the page
-  stays responsive while the image renders.
+  stays responsive while images render.
 
 All edits and new frames are persisted to the store; continuity notes from director
 mode show as a header badge. Locally install the API extra with
 `pip install -e '.[web]'`.
 
-**Building the frontend.** The SPA lives in `frontend/` and is served as static
-files by Django once built:
+**Building the frontend.** The SPA lives in `frontend/` (Vite + TypeScript + React,
+typed via Kubb + TanStack Query) and is served as static files by Django once built.
+The `frontend/justfile` runs **pnpm inside a Node container** — no host Node needed:
 
 ```bash
-cd frontend
-npm install
-npm run openapi      # export the OpenAPI schema from the Ninja API
-npm run generate     # Kubb -> typed client + TanStack Query hooks (src/gen)
-npm run build        # Vite -> frontend/dist (Django serves it)
-# or `npm run dev` for the Vite dev server (proxies /api to :8000)
+just frontend build        # pnpm install + generate (Kubb) + vite build -> frontend/dist
+just frontend dev          # Vite dev server (proxies /api to the API on :8000)
+just frontend typecheck
+just openapi               # refresh frontend/openapi.json after API changes (Python image)
 ```
 
-Until `frontend/dist` exists the server returns a small placeholder page; the JSON
-API under `/api/…` works regardless.
+Or with Node/pnpm on the host: `cd frontend && pnpm install && pnpm run build`. Until
+`frontend/dist` exists the server returns a small placeholder page; the JSON API
+under `/api/…` works regardless.
 
 ## Video
 

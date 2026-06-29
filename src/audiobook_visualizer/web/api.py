@@ -44,7 +44,9 @@ class ShotOut(Schema):
     start_time: Optional[float] = None
     end_time: Optional[float] = None
     camera_move: str = ""
+    scene_heading: str = ""
     prompt: str = ""
+    rendered: bool = False
     frame: Optional[FrameOut] = None
     image_url: Optional[str] = None
     reference_urls: list[str] = []
@@ -91,6 +93,15 @@ class RenderIn(Schema):
     style: Optional[str] = None
 
 
+class RenderAllIn(Schema):
+    only_missing: bool = True
+
+
+class RenderAllOut(Schema):
+    queued: int
+    jobs: list[JobOut]
+
+
 class UpdateShotIn(Schema):
     visual_description: Optional[str] = None
     camera_move: Optional[str] = None
@@ -118,6 +129,11 @@ def build_api(studio: Studio) -> NinjaAPI:
     def render(request, slug: str, body: RenderIn):  # noqa: ANN001
         """Enqueue an async re-render; returns the queued job (poll /jobs/{id})."""
         return studio.enqueue_render(slug, body.prompt or None, body.style or None)
+
+    @api.post("/render-all", response=RenderAllOut, operation_id="renderAll")
+    def render_all(request, body: RenderAllIn):  # noqa: ANN001
+        """Enqueue async re-renders for every shot (or only the unrendered ones)."""
+        return studio.render_all(body.only_missing)
 
     @api.get("/jobs/{job_id}", response=JobOut, operation_id="getJob")
     def job(request, job_id: int):  # noqa: ANN001

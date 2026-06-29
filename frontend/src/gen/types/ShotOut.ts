@@ -66,7 +66,17 @@ export type ShotOut = {
      * @default ""
      * @type string | undefined
     */
+    scene_heading?: string;
+    /**
+     * @default ""
+     * @type string | undefined
+    */
     prompt?: string;
+    /**
+     * @default false
+     * @type boolean | undefined
+    */
+    rendered?: boolean;
     frame?: (FrameOut | null);
     image_url?: (string | null);
     /**

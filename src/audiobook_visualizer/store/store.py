@@ -200,6 +200,19 @@ class ProductionStore:
         rows.sort(key=lambda r: (r.start, r.chunk_label))
         return [(int(r.id), r.chunk_label, r.start, r.end) for r in rows]
 
+    def set_segment_structure(self, segment_id: int, structure_json: str) -> None:
+        with self._write_lock, self.session() as s:
+            seg = s.get(Segment, segment_id)
+            if seg is not None:
+                seg.structure_json = structure_json
+                s.add(seg)
+                s.commit()
+
+    def get_segment_structure(self, segment_id: int) -> Optional[str]:
+        with self.session() as s:
+            seg = s.get(Segment, segment_id)
+            return seg.structure_json if seg else None
+
     def find_segment(self, production_id: int, chunk_label: str) -> Optional[int]:
         with self.session() as s:
             seg = s.exec(
